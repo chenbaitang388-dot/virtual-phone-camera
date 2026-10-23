@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>edgeC</title></head>
+<body>
+<div id="out">running</div>
+<iframe id="pc" src="/pc.html?room=8888&debug=1" width="900" height="650"></iframe>
+<iframe id="ph" src="/phone.html?room=8888" width="380" height="700"></iframe>
+<script>
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const pill = (doc, sel) => { const e = doc.querySelector(sel + ' .pill__text'); return e ? e.textContent : 'MISS'; };
+const logs = (doc, n = 6) => Array.from(doc.querySelectorAll('.log__line')).map((e) => e.textContent).slice(-n).join(' | ');
+async function run() {
+  const rows = [];
+  const P = (k, v) => { rows.push(k + '=' + v); console.log('[EDGE] ' + k + '=' + v); };
+  const pc = () => document.getElementById('pc').contentWindow;
+  const ph = () => document.getElementById('ph').contentWindow;
+  await wait(18000);
+  P('t18.pc.webrtc', pill(pc().document, '#pill-webrtc') + '/' + pc().__vf.transport.status.webrtc.detail);
+  P('t18.pc.data', pill(pc().document, '#pill-data'));
+  P('t18.ph.link', pill(ph().document, '#pill-link'));
+  P('t18.pc.chan', pc().__vf.transport.stats.primaryChannel);
+
+  // ---- test4: refresh phone, keep same room ----
+  const phEl = document.getElementById('ph');
+  phEl.src = '/phone.html?room=8888';
+  console.log('[EDGE] phone refreshed');
+  await wait(5000);
+  P('t23.afterRefresh.pc.webrtc', pill(pc().document, '#pill-webrtc') + '/' + pc().__vf.transport.status.webrtc.detail);
+  P('t23.afterRefresh.pc.data', pill(pc().document, '#pill-data'));
+  P('t23.afterRefresh.pc.log', logs(pc().document, 5));
+  await wait(6000);
+  P('t29.afterRefresh.pc.data', pill(pc().document, '#pill-data'));
+  P('t29.afterRefresh.pc.webrtc', pill(pc().document, '#pill-webrtc') + '/' + pc().__vf.transport.status.webrtc.detail);
+  P('t29.afterRefresh.ph.link', pill(ph().document, '#pill-link'));
+
+  // ---- test3: PC changes room ----
+  pc().document.querySelector('#btn-new-room').click();
+  console.log('[EDGE] pc changed room');
+  await wait(6000);
+  P('t35.newRoom.pc.room', pc().document.querySelector('#room-display').value);
+  P('t35.newRoom.pc.data', pill(pc().document, '#pill-data'));
+  P('t35.newRoom.ph.link', pill(ph().document, '#pill-link'));
+  P('t35.newRoom.ph.room', pill(ph().document, '#pill-room'));
+  P('t35.newRoom.ph.log', logs(ph().document, 5));
+  await wait(6000);
+  P('t41.newRoom.ph.link', pill(ph().document, '#pill-link'));
+  P('t41.newRoom.pc.data', pill(pc().document, '#pill-data'));
+  document.getElementById('out').textContent = rows.join('\n');
+}
+window.addEventListener('load', () => setTimeout(() => {
+  run().catch((e) => { document.getElementById('out').textContent = 'ERR ' + e.message; console.log('[EDGE] ERR ' + e.message); });
+}, 300));
+</script>
+</body></html>

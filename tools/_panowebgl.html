@@ -1,0 +1,95 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>panowebgl</title></head>
+<body>
+<script type="module">
+import * as THREE from '../vendor/three.module.js';
+
+function log(...a){ console.log(a.join(' ')); }
+
+function makeTestTexture() {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 256;
+  const g = c.getContext('2d');
+  // 4 quadrants by u: red, green, blue, yellow
+  g.fillStyle = '#ff0000'; g.fillRect(0, 0, 128, 256);      // u 0..0.25
+  g.fillStyle = '#00ff00'; g.fillRect(128, 0, 128, 256);    // u 0.25..0.5
+  g.fillStyle = '#0000ff'; g.fillRect(256, 0, 128, 256);    // u 0.5..0.75
+  g.fillStyle = '#ffff00'; g.fillRect(384, 0, 128, 256);    // u 0.75..1
+  // white stripe centered at u=0.5 (image x = 256)
+  g.fillStyle = '#ffffff'; g.fillRect(248, 0, 16, 256);
+  // black label markers (top = north-up hint, not needed)
+  return c;
+}
+
+function run() {
+  const canvas = document.createElement('canvas');
+  document.body.appendChild(canvas);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true });
+  renderer.setSize(256, 256);
+  renderer.toneMapping = THREE.NoToneMapping;
+  renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+
+  const tex = new THREE.CanvasTexture(makeTestTexture());
+  tex.colorSpace = THREE.LinearSRGBColorSpace;
+  tex.generateMipmaps = false;
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+
+  const scene = new THREE.Scene();
+  const geo = new THREE.SphereGeometry(1, 64, 32);
+  const mat = new THREE.MeshBasicMaterial({ side: THREE.BackSide, map: tex, toneMapped: false });
+  const sphere = new THREE.Mesh(geo, mat);
+  scene.add(sphere);
+
+  const cam = new THREE.PerspectiveCamera(90, 1, 0.01, 100);
+  cam.position.set(0, 0, 0);
+
+  const rt = new THREE.WebGLRenderTarget(256, 256);
+  const buf = new Uint8Array(256 * 256 * 4);
+
+  function shoot(rotY) {
+    sphere.rotation.y = rotY;
+    sphere.updateMatrixWorld(true);
+    renderer.setRenderTarget(rt);
+    renderer.render(scene, cam);
+    renderer.readRenderTargetPixels(rt, 0, 0, 256, 256, buf);
+    const at = (x, y) => { const i = (y * 256 + x) * 4; return [buf[i], buf[i+1], buf[i+2]]; };
+    const dirs = [
+      ['+X', new THREE.Vector3(1, 0, 0)],
+      ['-X', new THREE.Vector3(-1, 0, 0)],
+      ['+Z', new THREE.Vector3(0, 0, 1)],
+      ['-Z', new THREE.Vector3(0, 0, -1)],
+    ];
+    const out = [];
+    for (const [name, d] of dirs) {
+      cam.lookAt(d);
+      renderer.render(scene, cam);
+      renderer.readRenderTargetPixels(rt, 0, 0, 256, 256, buf);
+      // center row y=128; sample L=98, C=128, R=158
+      out.push(`${name}: C=[${at(128,128)}] L=[${at(98,128)}] R=[${at(158,128)}]`);
+    }
+    return out;
+  }
+
+  log('[PANO3D] ---- rotY=0 ----');
+  for (const s of shoot(0)) log('[PANO3D] ' + s);
+  log('[PANO3D] ---- rotY=+PI/2 (scene.js value) ----');
+  for (const s of shoot(Math.PI / 2)) log('[PANO3D] ' + s);
+
+  // Also: where does the stripe (u=0.5) and each quadrant boundary land? print full center-row gradient samples
+  sphere.rotation.y = 0; sphere.updateMatrixWorld(true);
+  cam.lookAt(new THREE.Vector3(1, 0, 0));
+  renderer.render(scene, cam);
+  renderer.readRenderTargetPixels(rt, 0, 0, 256, 256, buf);
+  let row = '';
+  for (let x = 0; x < 256; x += 16) { const i = (128 * 256 + x) * 4; row += `${x}:[${buf[i]},${buf[i+1]},${buf[i+2]}] `; }
+  log('[PANO3D] looking +X rotY=0 center-row samples: ' + row);
+
+  // stripe azimuth conversion: which world dir shows each color when rotY=0
+  log('[PANO3D] EXPECT u=0.5(white)->? ; u=0.75(yellow)->? ; u=0.25(green)->?');
+  log('[PANO3D] DONE');
+}
+
+window.addEventListener('load', () => { requestAnimationFrame(() => { try { run(); } catch (e) { log('[PANO3D] ERR ' + (e && e.message)); } }); });
+</script>
+</body></html>

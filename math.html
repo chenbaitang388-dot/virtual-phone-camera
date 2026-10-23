@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<script type="importmap">
+{ "imports": { "three": "../vendor/three.module.js" } }
+</script>
+</head>
+<body>
+<pre id="out"></pre>
+<script type="module">
+import * as THREE from 'three';
+import { deviceOrientationToQuaternion, OrientationSmoother, OrientationSource } from '../src/orientation.js';
+import { CanvasRecorder, pickMimeType, recorderSupport } from '../src/recorder.js';
+
+const L = (...a) => console.log('[MATH]', ...a);
+const F = (x, n = 4) => Number(x).toFixed(n);
+const ang = (q) => 2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180 / Math.PI;
+
+// ---------- A. deviceOrientationToQuaternion ----------
+{
+  const q = new THREE.Quaternion();
+  deviceOrientationToQuaternion(q, 0, 0, 0, 0);
+  L('A1 identity-input ->', [q.x, q.y, q.z, q.w].map(x => F(x)).join(','), '(expect rot -90 about X = -0.7071,0,0,0.7071)');
+  deviceOrientationToQuaternion(q, 90, 0, 0, 0);
+  L('A2 alpha=90 ->', [q.x, q.y, q.z, q.w].map(x => F(x)).join(','));
+  const e = new THREE.Euler().setFromQuaternion(q, 'YXZ');
+  L('A2 euler deg ->', [e.x, e.y, e.z].map(d => F(d * 180 / Math.PI, 2)).join(','));
+}
+
+// ---------- B. gain scaling ----------
+{
+  const axis = new THREE.Vector3(0.3, 0.8, -0.5).normalize();
+  const gains = [0.4, 0.5, 1, 1.5, 2, 2.4];
+  const sm = new OrientationSmoother({ gain: 1 });
+  sm.calibrate(new THREE.Quaternion()); // 零点 = 单位
+  for (const g of gains) {
+    const rows = [];
+    for (const deg of [10, 45, 90, 120, 150, 170, 179]) {
+      sm.gain = g;
+      const src = new THREE.Quaternion().setFromAxisAngle(axis, deg * Math.PI / 180);
+      sm.calibrate(new THREE.Quaternion());
+      sm.push(src, 1000);
+      const got = ang(sm.target);
+      const expRaw = deg * g;
+      const expClamped = Math.min(expRaw, 179.1);
+      rows.push(`${deg}->${F(got, 2)}(exp ${F(expClamped, 2)}${got > expRaw + 0.5 ? ' CLAMP' : ''})`);
+    }
+    L(`B gain=${g}:`, rows.join('  '));
+  }
+}
+
+// ---------- B2. gain=2.4 monotonicity/continuity sweep ----------
+{
+  const axis = new THREE.Vector3(0.2, 0.9, 0.1).normalize();
+  const sm = new OrientationSmoother({ gain: 2.4 });
+  sm.calibrate(new THREE.Quaternion());
+  let maxJump = 0, prev = 0, jumpAt = -1, nonMono = 0;
+  for (let deg = 0.5; deg <= 180; deg += 0.5) {
+    sm.gain = 2.4;
+    const src = new THREE.Quaternion().setFromAxisAngle(axis, deg * Math.PI / 180);
+    sm.calibrate(new THREE.Quaternion());
+    sm.push(src, 1000);
+    const got = ang(sm.target);
+    if (deg > 0.5) {
+      if (got < prev - 1e-6) nonMono++;
+      if (Math.abs(got - prev) > maxJump) { maxJump = Math.abs(got - prev); jumpAt = deg; }
+    }
+    prev = got;
+  }
+  L(`B2 gain=2.4 sweep 0.5..180 step0.5: maxStepJump=${F(maxJump, 3)}deg at deg=${jumpAt}, nonMonotonic=${nonMono}`);
+  // w sign of clamped output at 179
+  const src = new THREE.Quaternion().setFromAxisAngle(axis, 179 * Math.PI / 180);
+  sm.gain = 2.4; sm.calibrate(new THREE.Quaternion()); sm.push(src, 1000);
+  L('B2 gain=2.4 deg=179 -> out.w=', F(sm.target.w, 5), 'angle=', F(ang(sm.target), 3));
+}
+
+// ---------- C. relative.w<0 flip reachable ----------
+{
+  const axis = new THREE.Vector3(0, 1, 0);
+  const sm = new OrientationSmoother({ gain: 1 });
+  sm.calibrate(new THREE.Quaternion());
+  const src = new THREE.Quaternion().setFromAxisAngle(axis, 200 * Math.PI / 180); // w<0
+  L('C input 200deg w=', F(src.w, 5), '(<0?', src.w < 0, ')');
+  sm.gain = 1; sm.calibrate(new THREE.Quaternion()); sm.push(src, 1000);
+  L('C after push(gain=1) target w=', F(sm.target.w, 5), 'angle=', F(ang(sm.target), 3),
+    '(expect flipped to 160deg about -Y, w>0)');
+  // gain path also
+  const sm2 = new OrientationSmoother({ gain: 1.5 });
+  sm2.calibrate(new THREE.Quaternion()); sm2.gain = 1.5; sm2.calibrate(new THREE.Quaternion()); sm2.push(src, 1000);
+  L('C gain=1.5 200deg -> angle=', F(ang(sm2.target), 3), 'w=', F(sm2.target.w, 4));
+}
+
+// ---------- D. extrapolation direction & magnitude (constant world axis) ----------
+function runConst(gain, latency, label) {
+  const n = new THREE.Vector3(0.25, 0.9, -0.35).normalize();
+  const w = 1.2; // rad/s
+  const dt = 1 / 60;
+  const sm = new OrientationSmoother({ gain });
+  sm.latency = latency;                    // 外部赋值（pc.html 就是这么做的）
+  sm.calibrate(new THREE.Quaternion());
+  let latest = null, kLast = 0;
+  for (let k = 0; k <= 20; k++) {
+    const src = new THREE.Quaternion().setFromAxisAngle(n, w * k * dt);
+    sm.push(src, 1000 + k * dt * 1000);
+    latest = src; kLast = k;
+  }
+  const d = latest.clone().invert().multiply(sm.target); // predicted 相对 measured 的增量
+  const angDeg = ang(d);
+  const sign = d.w >= 0 ? +1 : -1;
+  const axisOut = new THREE.Vector3(d.x, d.y, d.z).multiplyScalar(sign).normalize();
+  const dot = axisOut.dot(n); // +1 => 与外推方向(世界轴 n)一致；-1 => 反向外推
+  // 与"真实下一步"比较：预测应领先 measured 约 ω*lead
+  const lead = Math.min(latency * 0.5, sm.leadCap);
+  L(`D ${label}: pred-measured=${F(angDeg, 3)}deg (true ω*lead=${F(w * lead * 180 / Math.PI, 3)}deg), axis·n=${F(dot, 4)} (>0=前推, <0=后推)`);
+  return { angDeg, dot };
+}
+runConst(1, 0.15, 'gain=1 lat=0.15');
+runConst(1, 0.0, 'gain=1 lat=0   (no extrap)');
+runConst(1.5, 0.3, 'gain=1.5 lat=0.3');
+runConst(1, 0.5, 'gain=1 lat=0.5 (should clamp 0.35rad)');
+
+// ---------- D2. changing axis: check applyQuaternion(relative) == applyQuaternion(target) ----------
+{
+  function worldAxis(method) {
+    const n = new THREE.Vector3(0.3, 0.6, 0.74).normalize();
+    const w = 1.5, dt = 1 / 60;
+    const sm = new OrientationSmoother({ gain: 2, latency: 0.2 });
+    sm.calibrate(new THREE.Quaternion());
+    let lastAxis = null, diffRelTar = 0;
+    for (let k = 0; k <= 12; k++) {
+      // 让轴随帧旋转，制造 target 与 relative 不同的坐标系
+      const nn = n.clone().applyAxisAngle(new THREE.Vector3(1, 0, 0.3).normalize(), 0.4 * k);
+      const src = new THREE.Quaternion().setFromAxisAngle(nn, w * k * dt);
+      const target = sm.target.clone();
+      sm.push(src, 1000 + k * dt * 1000);
+      // 复现内部几何：delta = target^-1 * relative, 分别用 relative / target 搬运轴
+      const relative = sm.target.clone(); // 近似，仅用于比较坐标系差异
+      const delta = target.clone().invert().multiply(relative);
+      const halfAngle = Math.acos(Math.min(1, Math.abs(delta.w)));
+      const s = Math.sin(halfAngle);
+      if (s > 1e-5) {
+        const a1 = new THREE.Vector3(delta.x, delta.y, delta.z).divideScalar(s).applyQuaternion(relative);
+        const a2 = new THREE.Vector3(delta.x, delta.y, delta.z).divideScalar(s).applyQuaternion(target);
+        lastAxis = a1.clone();
+        diffRelTar = Math.max(diffRelTar, a1.distanceTo(a2));
+      }
+    }
+    return diffRelTar;
+  }
+  L('D2 applyQuaternion(relative) vs (target) max axis diff =', F(worldAxis(), 8), '(0 => 等价)');
+}
+
+// ---------- E. sign of abs(delta.w) when delta.w<0 ----------
+{
+  // 构造 delta.w<0 的 delta，看 axis 与 rate 是否同向
+  const axis = new THREE.Vector3(0, 1, 0);
+  const delta = new THREE.Quaternion().setFromAxisAngle(axis, 200 * Math.PI / 180); // w<0
+  const halfAbs = Math.acos(Math.min(1, Math.abs(delta.w)));
+  const sAbs = Math.sin(halfAbs);
+  const axisAbs = new THREE.Vector3(delta.x, delta.y, delta.z).divideScalar(sAbs).normalize();
+  const halfTrue = Math.acos(Math.min(1, delta.w)); // >PI/2
+  L('E delta.w=', F(delta.w, 4), ' halfAngle(abs)=', F(halfAbs * 180 / Math.PI, 1),
+    'deg  halfAngle(true)=', F(halfTrue * 180 / Math.PI, 1), 'deg');
+  L('E axis(abs w)=', [axisAbs.x, axisAbs.y, axisAbs.z].map(x => F(x, 3)).join(','),
+    ' sin(halfAbs)=', F(sAbs, 4), ' sin(halfTrue)=', F(Math.sin(halfTrue), 4));
+}
+
+// ---------- H. 动态：轴变化时的外推方向 + 反馈稳定性 + dt 抖动 ----------
+{
+  // 构造真实感运动：yaw 匀速 + pitch 摆动，世界系轴随之变化
+  function motion(t) {
+    const e = new THREE.Euler(Math.sin(t * 1.7) * 0.6, t * 1.1, Math.cos(t * 1.3) * 0.3, 'YXZ');
+    return new THREE.Quaternion().setFromEuler(e);
+  }
+  const dt = 1 / 60;
+  const sm = new OrientationSmoother({ gain: 1.3 });
+  sm.latency = 0.12;
+  sm.calibrate(new THREE.Quaternion());
+  let t = 0;
+  for (let k = 0; k <= 60; k++) { sm.push(motion(t), 1000 + t * 1000); t += dt; }
+  // 当前 measured 与 predicted
+  const meas = motion(t - dt);            // 最近一次 push 的输入
+  const d = meas.clone().invert().multiply(sm.target);
+  const sign = d.w >= 0 ? +1 : -1;
+  const axisOut = new THREE.Vector3(d.x, d.y, d.z).multiplyScalar(sign).normalize();
+  // 真实前进方向：用解析微分近似
+  const eps = 1e-3;
+  const ahead = motion(t - dt + eps);
+  const step = meas.clone().invert().multiply(ahead);
+  const stepAxis = new THREE.Vector3(step.x, step.y, step.z).normalize();
+  const dotAhead = axisOut.dot(stepAxis);
+  L(`H dynamic: pred-measured=${F(ang(sm.target.clone().multiply(meas.clone().invert())), 3)}deg, ` +
+    `extrapAxis·trueStepAxis=${F(dotAhead, 4)} (>0 正确前推), rate=${F(sm.angularRate, 3)}rad/s`);
+
+  // 反馈稳定性：target=predicted 自反馈下，长时间是否会漂/爆
+  const sm2 = new OrientationSmoother({ gain: 1.3 });
+  sm2.latency = 0.12;
+  sm2.calibrate(new THREE.Quaternion());
+  let tt = 0, maxStep = 0;
+  let prevTarget = sm2.target.clone();
+  for (let k = 0; k <= 600; k++) {
+    sm2.push(motion(tt), 1000 + tt * 1000);
+    const s = prevTarget.clone().invert().multiply(sm2.target);
+    maxStep = Math.max(maxStep, ang(s));
+    prevTarget.copy(sm2.target);
+    tt += dt;
+  }
+  L(`H feedback 600帧: 相邻 target 最大跳变=${F(maxStep, 3)}deg (正常每帧应 ~1.3*1.1*dt=` +
+    `${F(1.3 * 1.1 * dt * 180 / Math.PI, 3)}deg 量级；若远大于则自反馈放大)`);
+
+  // dt 抖动：正常 60Hz 若干帧后插入一次 300ms 间隔，看 rate/extra 降级
+  const sm3 = new OrientationSmoother({ gain: 1 });
+  sm3.latency = 0.12;
+  sm3.calibrate(new THREE.Quaternion());
+  let ts = 0;
+  for (let k = 0; k < 10; k++) { sm3.push(motion(ts), 1000 + ts * 1000); ts += dt; }
+  const rateNormal = sm3.angularRate;
+  ts += 0.3; // 抖动一次
+  sm3.push(motion(ts), 1000 + ts * 1000);
+  const rateStall = sm3.angularRate;
+  ts += dt;
+  sm3.push(motion(ts), 1000 + ts * 1000);
+  const rateAfter = sm3.angularRate;
+  L(`H jitter: rate normal=${F(rateNormal, 3)}, after 300ms gap=${F(rateStall, 3)}, next=${F(rateAfter, 3)} rad/s`);
+}
+
+// ---------- I. 修正复现：delta 用"上一帧测量相对量"而非外推后的 target ----------
+{
+  function motion(t) {
+    const e = new THREE.Euler(Math.sin(t * 1.7) * 0.6, t * 1.1, Math.cos(t * 1.3) * 0.3, 'YXZ');
+    return new THREE.Quaternion().setFromEuler(e);
+  }
+  // 复刻 push 的数学，但 delta 参考上一帧"测量"relative
+  function sim(fix, gain, latency, frames, dt) {
+    let calibInv = new THREE.Quaternion(); // 单位
+    let target = new THREE.Quaternion();   // 输出（外推后）
+    let prevMeasured = new THREE.Quaternion();
+    let hasPrev = false, rateLast = 0;
+    const extraQ = new THREE.Quaternion();
+    const axis = new THREE.Vector3();
+    const predicted = new THREE.Quaternion();
+    let maxStep = 0, prevTarget = target.clone();
+    let t = 0;
+    for (let k = 0; k <= frames; k++) {
+      const rel = motion(t); // gain=1 时 relative = source
+      let delta = new THREE.Quaternion();
+      if (hasPrev) {
+        const ref = fix ? prevMeasured : target;
+        delta = ref.clone().invert().multiply(rel);
+        const halfAngle = Math.acos(Math.min(1, Math.abs(delta.w)));
+        const s = Math.sin(halfAngle);
+        if (s > 1e-5) {
+          axis.set(delta.x, delta.y, delta.z).divideScalar(s).applyQuaternion(rel);
+          const rate = (2 * halfAngle) / dt;
+          rateLast = rate;
+          const extra = Math.min(rate * Math.min(latency * 0.5, 0.09), 0.35);
+          extraQ.setFromAxisAngle(axis, extra);
+          predicted.copy(extraQ).multiply(rel);
+        } else predicted.copy(rel);
+      } else predicted.copy(rel);
+      prevMeasured.copy(rel);
+      hasPrev = true;
+      const st = prevTarget.clone().invert().multiply(predicted);
+      maxStep = Math.max(maxStep, ang(st));
+      prevTarget.copy(predicted);
+      target.copy(predicted);
+      t += dt;
+    }
+    return { rateLast, maxStep, target, t };
+  }
+  const dt = 1 / 60;
+  const bad = sim(false, 1, 0.12, 60, dt);
+  const good = sim(true, 1, 0.12, 60, dt);
+  const meas = motion(bad.t - dt);
+  const dBad = meas.clone().invert().multiply(bad.target);
+  const dGood = meas.clone().invert().multiply(good.target);
+  L(`I buggy : rate=${F(bad.rateLast, 3)} extra(pred-meas)=${F(ang(dBad), 3)}deg maxStep/600=${F(bad.maxStep, 3)}deg`);
+  L(`I fixed : rate=${F(good.rateLast, 3)} extra(pred-meas)=${F(ang(dGood), 3)}deg maxStep/600=${F(good.maxStep, 3)}deg`);
+}
+
+// ---------- F. screenAngle precedence ----------
+{
+  // 直接检验 JS 语义：0 ?? x
+  const zero = 0;
+  L('F 0 ?? 99 =', zero ?? 99, '(want 0)');
+  const obj = { orientation: { angle: 0 } };
+  const v = (obj.orientation && obj.orientation.angle) ?? 12345 ?? 0;
+  L('F {angle:0} ?? window ?? 0 =', v, '(want 0, NOT 12345)');
+  const obj2 = { orientation: { angle: undefined } };
+  const v2 = (obj2.orientation && obj2.orientation.angle) ?? 77 ?? 0;
+  L('F {angle:undefined} ?? 77 =', v2, '(want 77)');
+  const obj3 = { orientation: undefined };
+  const v3 = (obj3.orientation && obj3.orientation.angle) ?? 55 ?? 0;
+  L('F {orientation:undefined} ?? 55 =', v3, '(want 55)');
+}
+
+// ---------- G. recorder with mock ----------
+{
+  const track = { stopped: false, stop() { this.stopped = true; } };
+  const fakeStream = { getTracks: () => [track], _closed: false };
+  const canvas = { captureStream: () => fakeStream };
+
+  class MockRec {
+    constructor(stream, opts) { this.stream = stream; this.opts = opts; this.state = 'inactive'; this.mimeType = 'video/webm;codecs=vp9'; }
+    start(ts) { this.state = 'recording'; }
+    stop() { if (this.state === 'inactive') { this._stopThrew = true; throw new Error('stop on inactive'); } this.state = 'inactive'; if (this.onstop) this.onstop(); }
+    pause() { this.state = 'paused'; }
+  }
+  window.MediaRecorder = MockRec;
+  window.HTMLCanvasElement = function () {};
+  window.HTMLCanvasElement.prototype.captureStream = function () {};
+
+  const events = [];
+  const done = [];
+  const rec = new CanvasRecorder(canvas, {
+    onStateChange: (e) => events.push(e.state),
+    onDone: (d) => done.push(d),
+  });
+  rec.start({ fps: 30, bitsPerSecond: 0 });
+  L('G start -> recording=', rec.recording, 'state=', rec.recorder.state, 'events=', events.join('/'));
+
+  // 模拟 error：MediaRecorder 转入 inactive
+  rec.recorder.state = 'inactive';
+  rec.recorder.onerror({ error: new Error('boom') });
+  L('G after onerror -> recording=', rec.recording, 'recorder!=null?', !!rec.recorder,
+    'stream null?', rec.stream === null, 'events=', events.join('/'));
+  // 尝试 stop 用户点击
+  let threw = false;
+  try { rec.stop(); } catch (e) { threw = true; }
+  L('G stop() after error: threw?', threw, 'recorder.state=', rec.recorder.state, 'onDone hits=', done.length);
+  // 能不能再次 start
+  let threw2 = false, s2 = null;
+  try { s2 = rec.start({ fps: 30, bitsPerSecond: 0 }); } catch (e) { threw2 = true; }
+  L('G restart after error: threw?', threw2, 'ret=', s2, 'recording=', rec.recording);
+}
+</script>
+
+</body></html>

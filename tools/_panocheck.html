@@ -1,0 +1,227 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>panocheck</title></head>
+<body><pre id="out"></pre>
+<script type="module">
+import { createPanoramaCanvas, createPanoramaDataURL } from '../src/panorama.js';
+
+const LINE = [];
+function log(...a){ const s = a.join(' '); LINE.push(s); console.log(s); }
+function fmt(n,d=3){ return Number(n).toFixed(d); }
+
+const CLAIM = { N:2048, NE:2560, E:3072, SE:3584, S:0, SW:512, W:1024, NW:1536 };
+const COLOR = {
+  N:'#63d8dc', NE:'#d97ad9', E:'#f0913e', SE:'#7ec850',
+  S:'#f4dc5a', SW:'#5a9df0', W:'#ef5f5f', NW:'#4fd0a8',
+};
+function hex2rgb(h){ const n=parseInt(h.slice(1),16); return [(n>>16)&255,(n>>8)&255,n&255]; }
+
+// ---------- 1. exports / defaults ----------
+try {
+  const c0 = createPanoramaCanvas();
+  log('[PANO] exports:createPanoramaCanvas=OK createPanoramaDataURL=' + (typeof createPanoramaDataURL));
+  log('[PANO] defaults canvas.width=' + c0.width + ' height=' + c0.height + ' (claim 4096x2048)');
+  const durl = createPanoramaDataURL({ width: 64, height: 32 });
+  log('[PANO] createPanoramaDataURL({64,32}) ok=' + (typeof durl === 'string' && durl.startsWith('data:image/png')) + ' head=' + durl.slice(0,22));
+} catch (e) {
+  log('[PANO] EXPORT ERROR: ' + (e && e.message));
+}
+
+// ---------- 2. landmark localization on dusk 4096x2048 ----------
+const W = 4096, H = 2048;
+let landImg = null;
+try {
+  const cv = createPanoramaCanvas({ width: W, height: H, seed: 20261024, theme: 'dusk' });
+  const ctx = cv.getContext('2d');
+  landImg = ctx.getImageData(0, 0, W, H);
+} catch (e) {
+  log('[PANO] landmark render ERROR: ' + (e && e.message));
+}
+
+function circularCentroid(counts) {
+  // counts: Float64Array per column, wrap-aware weighted circular mean
+  let sx = 0, sy = 0, tot = 0;
+  for (let x = 0; x < counts.length; x++) {
+    const v = counts[x]; if (v <= 0) continue;
+    const a = (x / counts.length) * Math.PI * 2;
+    sx += v * Math.cos(a); sy += v * Math.sin(a); tot += v;
+  }
+  if (tot === 0) return null;
+  let a = Math.atan2(sy, sx); if (a < 0) a += Math.PI * 2;
+  return (a / (Math.PI * 2)) * counts.length;
+}
+
+if (landImg) {
+  const d = landImg.data;
+  // (a) white label strokes
+  const whiteCol = new Float64Array(W);
+  // (b) shape-color match per landmark
+  const colorCols = {};
+  const colorKeys = Object.keys(COLOR);
+  const colorRGB = {};
+  for (const k of colorKeys) { colorCols[k] = new Float64Array(W); colorRGB[k] = hex2rgb(COLOR[k]); }
+
+  for (let y = 0; y < H; y++) {
+    const row = y * W * 4;
+    for (let x = 0; x < W; x++) {
+      const i = row + x * 4;
+      const r = d[i], g = d[i+1], b = d[i+2];
+      if (r > 200 && g > 200 && b > 200) whiteCol[x] += 1;
+      for (let ci = 0; ci < colorKeys.length; ci++) {
+        const k = colorKeys[ci];
+        const cr = colorRGB[k][0], cg = colorRGB[k][1], cb = colorRGB[k][2];
+        if (Math.abs(r-cr) <= 32 && Math.abs(g-cg) <= 32 && Math.abs(b-cb) <= 32) colorCols[k][x] += 1;
+      }
+    }
+  }
+  log('[PANO] ---- landmark localization (dusk 4096x2048) ----');
+  for (const k of ['N','NE','E','SE','S','SW','W','NW']) {
+    const claim = CLAIM[k];
+    // label centroid restricted to +-150 window (wrap aware)
+    const win = new Float64Array(301);
+    for (let dx = -150; dx <= 150; dx++) {
+      const xx = ((claim + dx) % W + W) % W;
+      win[dx + 150] = whiteCol[xx];
+    }
+    // circular centroid on full array but weighted only inside window
+    let sx = 0, sy = 0, tot = 0;
+    for (let dx = -150; dx <= 150; dx++) {
+      const xx = ((claim + dx) % W + W) % W;
+      const v = whiteCol[xx]; if (v <= 0) continue;
+      const a = (xx / W) * Math.PI * 2;
+      sx += v * Math.cos(a); sy += v * Math.sin(a); tot += v;
+    }
+    let labX = null;
+    if (tot > 0) { let a = Math.atan2(sy, sx); if (a < 0) a += Math.PI*2; labX = (a/(Math.PI*2))*W; }
+    const labDiff = labX === null ? 'n/a' : (function(){ let dd = labX - claim; if (dd > W/2) dd -= W; if (dd < -W/2) dd += W; return fmt(dd,1); })();
+
+    // shape-color centroid in same window
+    const cc = colorCols[k];
+    let csx = 0, csy = 0, ct = 0;
+    for (let dx = -150; dx <= 150; dx++) {
+      const xx = ((claim + dx) % W + W) % W;
+      const v = cc[xx]; if (v <= 0) continue;
+      const a = (xx / W) * Math.PI * 2;
+      csx += v * Math.cos(a); csy += v * Math.sin(a); ct += v;
+    }
+    let shapeX = null;
+    if (ct > 0) { let a = Math.atan2(csy, csx); if (a < 0) a += Math.PI*2; shapeX = (a/(Math.PI*2))*W; }
+    const shapeDiff = shapeX === null ? 'n/a' : (function(){ let dd = shapeX - claim; if (dd > W/2) dd -= W; if (dd < -W/2) dd += W; return fmt(dd,1); })();
+
+    log(`[PANO] ${k.padEnd(2)} claim=${String(claim).padStart(4)} labelX=${labX===null?'null':fmt(labX,1).padStart(7)} (d=${String(labDiff).padStart(6)}) shapeX=${shapeX===null?'null':fmt(shapeX,1).padStart(7)} (d=${String(shapeDiff).padStart(6)})`);
+  }
+
+  // independent peak count of white columns
+  let thr = 0; for (let x=0;x<W;x++) thr = Math.max(thr, whiteCol[x]);
+  const T = Math.max(3, thr * 0.25);
+  const peaks = [];
+  for (let x = 0; x < W; x++) {
+    const v = whiteCol[x];
+    if (v < T) continue;
+    const vl = whiteCol[(x-1+W)%W], vr = whiteCol[(x+1)%W];
+    if (v >= vl && v > vr) peaks.push(x);
+  }
+  // merge near peaks
+  const merged = [];
+  for (const p of peaks) {
+    if (merged.length && Math.abs(p - merged[merged.length-1]) < 200) continue;
+    merged.push(p);
+  }
+  log('[PANO] white-label peak columns (' + merged.length + '): ' + merged.join(','));
+}
+function _unused(){}
+
+// ---------- 3. seams ----------
+function seam(canvas) {
+  const w = canvas.width, h = canvas.height;
+  const ctx = canvas.getContext('2d');
+  const d = ctx.getImageData(0, 0, w, h).data;
+  let sum = 0, n = 0, sR = 0, sG = 0, sB = 0;
+  for (let y = 0; y < h; y++) {
+    const a = y * w * 4, b = (y * w + (w - 1)) * 4;
+    const dr = Math.abs(d[a]   - d[b]);
+    const dg = Math.abs(d[a+1] - d[b+1]);
+    const db = Math.abs(d[a+2] - d[b+2]);
+    sR += dr; sG += dg; sB += db; sum += (dr+dg+db)/3; n++;
+  }
+  return { mean: sum / n, meanR: sR/n, meanG: sG/n, meanB: sB/n };
+}
+function poleStats(canvas) {
+  const w = canvas.width, h = canvas.height;
+  const ctx = canvas.getContext('2d');
+  const d = ctx.getImageData(0, 0, w, h).data;
+  function rowStat(y) {
+    let sr=0,sg=0,sb=0, mr=0,mg=0,mb=0;
+    for (let x=0;x<w;x++){ const i=(y*w+x)*4; sr+=d[i]; sg+=d[i+1]; sb+=d[i+2]; }
+    const r=sr/w,g=sg/w,b=sb/w;
+    for (let x=0;x<w;x++){ const i=(y*w+x)*4; mr+=(d[i]-r)**2; mg+=(d[i+1]-g)**2; mb+=(d[i+2]-b)**2; }
+    return { r, g, b, sr: Math.sqrt(mr/w), sg: Math.sqrt(mg/w), sb: Math.sqrt(mb/w) };
+  }
+  return { top: rowStat(0), bottom: rowStat(h-1) };
+}
+
+const themeNames = ['dusk','day','night','space'];
+const canvases = {};
+for (const t of themeNames) {
+  try { canvases[t] = createPanoramaCanvas({ width: 1024, height: 512, theme: t }); }
+  catch (e) { log('[PANO] theme ' + t + ' ERROR: ' + (e && e.message)); }
+}
+log('[PANO] ---- seams (1024x512, mean abs diff col0 vs col w-1) ----');
+for (const t of themeNames) {
+  if (!canvases[t]) continue;
+  const s = seam(canvases[t]);
+  log(`[PANO] seam ${t.padEnd(5)} mean=${fmt(s.mean,3)} R=${fmt(s.meanR,3)} G=${fmt(s.meanG,3)} B=${fmt(s.meanB,3)}`);
+  const p = poleStats(canvases[t]);
+  log(`[PANO] poles ${t.padEnd(5)} top(meanRGB=${p.top.r.toFixed(1)},${p.top.g.toFixed(1)},${p.top.b.toFixed(1)} stdRGB=${p.top.sr.toFixed(1)},${p.top.sg.toFixed(1)},${p.top.sb.toFixed(1)}) bottom(meanRGB=${p.bottom.r.toFixed(1)},${p.bottom.g.toFixed(1)},${p.bottom.b.toFixed(1)} stdRGB=${p.bottom.sr.toFixed(1)},${p.bottom.sg.toFixed(1)},${p.bottom.sb.toFixed(1)})`);
+}
+// also seam on full-res dusk (S landmark sits exactly on the seam)
+try {
+  const s = seam(createPanoramaCanvas({ width: 4096, height: 2048, theme: 'dusk' }));
+  log(`[PANO] seam dusk@4096x2048 mean=${fmt(s.mean,3)} R=${fmt(s.meanR,3)} G=${fmt(s.meanG,3)} B=${fmt(s.meanB,3)}`);
+} catch (e) { log('[PANO] seam full ERROR ' + e.message); }
+
+// ---------- 4. themes not black ----------
+log('[PANO] ---- themes sanity (512x256) ----');
+for (const t of themeNames) {
+  try {
+    const cv = createPanoramaCanvas({ width: 512, height: 256, theme: t, seed: 12345 });
+    const d = cv.getContext('2d').getImageData(0,0,512,256).data;
+    let maxB = 0, sum = 0;
+    for (let i = 0; i < d.length; i += 4) { const b = Math.max(d[i],d[i+1],d[i+2]); if (b>maxB) maxB=b; sum += (d[i]+d[i+1]+d[i+2])/3; }
+    const mean = sum / (d.length/4);
+    log(`[PANO] theme ${t.padEnd(5)} ok maxBrightness=${maxB} meanBrightness=${fmt(mean,2)} allBlack=${maxB===0}`);
+  } catch (e) { log('[PANO] theme ' + t + ' THREW: ' + (e && e.message)); }
+}
+
+// ---------- 5. determinism ----------
+log('[PANO] ---- determinism (space 640x320, two runs) ----');
+try {
+  const a = createPanoramaCanvas({ width: 640, height: 320, theme: 'space', seed: 777 }).getContext('2d').getImageData(0,0,640,320).data;
+  const b = createPanoramaCanvas({ width: 640, height: 320, theme: 'space', seed: 777 }).getContext('2d').getImageData(0,0,640,320).data;
+  let diff = 0, maxd = 0;
+  for (let i = 0; i < a.length; i++) { const dd = Math.abs(a[i]-b[i]); if (dd) diff++; if (dd>maxd) maxd = dd; }
+  log(`[PANO] determinism differing channel-samples=${diff} of ${a.length} maxDiff=${maxd}`);
+  const c = createPanoramaCanvas({ width: 320, height: 160, theme: 'night', seed: 1 }).getContext('2d').getImageData(0,0,320,160).data;
+  const e = createPanoramaCanvas({ width: 320, height: 160, theme: 'night', seed: 1 }).getContext('2d').getImageData(0,0,320,160).data;
+  let diff2 = 0; for (let i = 0; i < c.length; i++) if (c[i] !== e[i]) diff2++;
+  log(`[PANO] determinism night512 differing=${diff2}`);
+} catch (e) { log('[PANO] determinism ERROR ' + (e && e.message)); }
+
+// ---------- 6. performance ----------
+log('[PANO] ---- performance ----');
+try {
+  for (let k = 0; k < 2; k++) {
+    const t0 = performance.now();
+    createPanoramaCanvas({ width: 4096, height: 2048, theme: 'dusk', seed: 20261024 });
+    const t1 = performance.now();
+    log(`[PANO] perf dusk 4096x2048 run${k} = ${fmt(t1-t0,1)} ms`);
+  }
+  const t0 = performance.now();
+  createPanoramaCanvas({ width: 4096, height: 2048, theme: 'space', seed: 20261024 });
+  const t1 = performance.now();
+  log(`[PANO] perf space 4096x2048 = ${fmt(t1-t0,1)} ms`);
+} catch (e) { log('[PANO] perf ERROR ' + (e && e.message)); }
+
+log('[PANO] DONE');
+document.getElementById('out').textContent = LINE.join('\n');
+</script>
+</body></html>

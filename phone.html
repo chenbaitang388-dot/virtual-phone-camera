@@ -232,6 +232,11 @@ function resetOffset() {
 const held = { up: false, down: false, left: false, right: false };
 const pad = $('#pad');
 
+// setPointerCapture 在指针已经不活跃时会抛错（比如手指刚抬起的那一帧），吞掉即可。
+function capture(el, pointerId) {
+  try { el.setPointerCapture?.(pointerId); } catch { /* 指针已失效 */ }
+}
+
 pad.addEventListener('pointerdown', (e) => {
   const zone = e.target.closest('.pad__zone');
   if (!zone) return;
@@ -244,7 +249,7 @@ pad.addEventListener('pointerdown', (e) => {
     return;
   }
   held[dir] = true;
-  zone.setPointerCapture?.(e.pointerId);
+  capture(zone, e.pointerId);
 });
 
 ['pointerup', 'pointercancel', 'pointerleave'].forEach((type) => {
@@ -267,7 +272,7 @@ pad.addEventListener('pointerdown', (e) => {
   dragId = e.pointerId;
   dragX = e.clientX;
   dragY = e.clientY;
-  pad.setPointerCapture?.(dragId);
+  capture(pad, dragId);
 });
 
 pad.addEventListener('pointermove', (e) => {

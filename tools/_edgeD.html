@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>edgeD</title></head>
+<body>
+<div id="out">running</div>
+<iframe id="pc" src="/pc.html?room=9999&debug=1" width="900" height="650"></iframe>
+<script>
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+async function run() {
+  const rows = [];
+  const P = (k, v) => { rows.push(k + '=' + v); console.log('[EDGE] ' + k + '=' + v); };
+  const pc = () => document.getElementById('pc').contentWindow;
+  const vf = () => pc().__vf;
+  const q = (qq) => qq ? '[' + [qq.x, qq.y, qq.z, qq.w].map((n) => Number.isFinite(n) ? (+n).toFixed(3) : 'NaN').join(',') + ']' : '-';
+  const matNaN = () => {
+    const g = vf().studio.phoneGroup;
+    if (!g) return 'nogroup';
+    return g.matrixWorld.elements.some((v) => !Number.isFinite(v)) ? 'NONFINITE' : 'finite';
+  };
+  await wait(4500);
+  pc().addEventListener('error', (e) => { P('UNCAUGHT.onerror', e.message); });
+  pc().addEventListener('unhandledrejection', (e) => { P('UNCAUGHT.rejection', String(e.reason)); });
+  const T = vf().transport;
+
+  T.inject('orient', { q: [0, 0, 0, 1] });
+  await wait(400);
+  P('1.baseline.target', q(vf().studio._target) + ' cur=' + q(vf().smoother.current) + ' mat=' + matNaN());
+
+  T.inject('orient', { q: ['NaN', 'NaN', 'NaN', 'NaN'] });
+  await wait(500);
+  P('2.NaNstring.target', q(vf().studio._target) + ' cur=' + q(vf().smoother.current) + ' mat=' + matNaN());
+
+  T.inject('orient', { q: [0, 0.7071, 0, 0.7071] });
+  await wait(800);
+  P('3.recover.target', q(vf().studio._target) + ' cur=' + q(vf().smoother.current) + ' mat=' + matNaN());
+
+  T.inject('orient', { q: [0, 0, 0, 0] });
+  await wait(500);
+  P('4.zeroQuat.target', q(vf().studio._target) + ' cur=' + q(vf().smoother.current));
+
+  const recvBefore = T.stats.received;
+  T._ingest('this is not json at all', 'mqtt');
+  T._ingest('{"t":1}', 'mqtt');
+  T._ingest('{"t":"orient"}', 'mqtt');
+  T._ingest('{"t":"orient","q":[1,2,3]}', 'mqtt');
+  T._ingest('x'.repeat(5000), 'mqtt');
+  T._ingest('{"t":"orient","q":[0,0,0,1],"seq":"5"}', 'mqtt');
+  T._ingest('{"t":"orient","q":[0,0,0,1],"seq":-5}', 'mqtt');
+  T._ingest('{"t":"orient","q":[0,0,0,1],"seq":1e15}', 'mqtt');
+  await wait(300);
+  P('5.malformed.didNotThrow', 'ok');
+  P('5.receivedDelta', T.stats.received - recvBefore);
+  P('5.targetAfter', q(vf().studio._target));
+
+  const dup0 = T.stats.duplicates;
+  T._ingest('{"t":"orient","q":[0,0,0,1],"seq":777777}', 'mqtt');
+  T._ingest('{"t":"orient","q":[0,0,0,1],"seq":777777}', 'mqtt');
+  await wait(200);
+  P('6.dupCountDelta', T.stats.duplicates - dup0);
+
+  // valid stream flood-free check
+  T.inject('orient', { q: [0, 0, 1, 0] });
+  await wait(400);
+  P('7.final.target', q(vf().studio._target) + ' mat=' + matNaN());
+  P('seenSetSize', T._seen.size);
+  document.getElementById('out').textContent = rows.join('\n');
+}
+window.addEventListener('load', () => setTimeout(() => {
+  run().catch((e) => { document.getElementById('out').textContent = 'ERR ' + e.message; console.log('[EDGE] ERR ' + e.message); });
+}, 300));
+</script>
+</body></html>

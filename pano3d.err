@@ -1,0 +1,19 @@
+[38524:35468:1024/005208.316:INFO:components\enterprise\browser\controller\chrome_browser_cloud_management_controller.cc:241] No machine level policy manager exists.
+[38524:35468:1024/005208.682:INFO:CONSOLE:7] "[PANO3D] ---- rotY=0 ----", source: http://127.0.0.1:8123/tools/_panowebgl.html (7)
+[38524:35468:1024/005208.707:INFO:CONSOLE:7] "[PANO3D] +X: C=[255,255,255] L=[0,0,255] R=[0,255,0]", source: http://127.0.0.1:8123/tools/_panowebgl.html (7)
+[38524:35468:1024/005208.708:INFO:CONSOLE:7] "[PANO3D] -X: C=[255,255,0] L=[255,0,0] R=[255,255,0]", source: http://127.0.0.1:8123/tools/_panowebgl.html (7)
+[38524:35468:1024/005208.708:INFO:CONSOLE:7] "[PANO3D] +Z: C=[255,0,0] L=[0,255,0] R=[255,0,0]", source: http://127.0.0.1:8123/tools/_panowebgl.html (7)
+[38524:35468:1024/005208.708:INFO:CONSOLE:7] "[PANO3D] -Z: C=[0,0,255] L=[255,255,0] R=[0,0,255]", source: http://127.0.0.1:8123/tools/_panowebgl.html (7)
+[38524:35468:1024/005208.708:INFO:CONSOLE:7] "[PANO3D] ---- rotY=+PI/2 (scene.js value) ----", source: http://127.0.0.1:8123/tools/_panowebgl.html (7)
+[38524:35468:1024/005208.715:INFO:CONSOLE:7] "[PANO3D] +X: C=[255,0,0] L=[0,255,0] R=[255,0,0]", source: http://127.0.0.1:8123/tools/_panowebgl.html (7)
+[38524:35468:1024/005208.715:INFO:CONSOLE:7] "[PANO3D] -X: C=[0,0,255] L=[255,255,0] R=[0,0,255]", source: http://127.0.0.1:8123/tools/_panowebgl.html (7)
+[38524:35468:1024/005208.715:INFO:CONSOLE:7] "[PANO3D] +Z: C=[255,255,0] L=[255,0,0] R=[255,255,0]", source: http://127.0.0.1:8123/tools/_panowebgl.html (7)
+[38524:35468:1024/005208.715:INFO:CONSOLE:7] "[PANO3D] -Z: C=[255,255,255] L=[0,0,255] R=[0,255,0]", source: http://127.0.0.1:8123/tools/_panowebgl.html (7)
+[38524:35468:1024/005208.716:INFO:CONSOLE:7] "[PANO3D] looking +X rotY=0 center-row samples: 0:[0,0,255] 16:[0,0,255] 32:[0,0,255] 48:[0,0,255] 64:[0,0,255] 80:[0,0,255] 96:[0,0,255] 112:[0,0,255] 128:[255,255,255] 144:[0,255,0] 160:[0,255,0] 176:[0,255,0] 192:[0,255,0] 208:[0,255,0] 224:[0,255,0] 240:[0,255,0] ", source: http://127.0.0.1:8123/tools/_panowebgl.html (7)
+[38524:35468:1024/005208.716:INFO:CONSOLE:7] "[PANO3D] EXPECT u=0.5(white)->? ; u=0.75(yellow)->? ; u=0.25(green)->?", source: http://127.0.0.1:8123/tools/_panowebgl.html (7)
+[38524:35468:1024/005208.716:INFO:CONSOLE:7] "[PANO3D] DONE", source: http://127.0.0.1:8123/tools/_panowebgl.html (7)
+[38524:39584:1024/005211.146:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: PHONE_REGISTRATION_ERROR
+[38524:39584:1024/005211.152:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: PHONE_REGISTRATION_ERROR
+[38524:39584:1024/005211.158:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: PHONE_REGISTRATION_ERROR
+[38524:39584:1024/005211.253:ERROR:google_apis\gcm\engine\mcs_client.cc:702]   Error code: 401  Error message: Authentication Failed: wrong_secret
+[38524:39584:1024/005211.253:ERROR:google_apis\gcm\engine\mcs_client.cc:704] Failed to log in to GCM, resetting connection.

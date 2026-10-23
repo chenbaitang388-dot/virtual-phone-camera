@@ -1,0 +1,63 @@
+[17508:20624:1024/005016.044:INFO:components\enterprise\browser\controller\chrome_browser_cloud_management_controller.cc:241] No machine level policy manager exists.
+[17508:38264:1024/005018.703:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT
+Created TensorFlow Lite XNNPACK delegate for CPU.
+[17508:20624:1024/005030.004:INFO:CONSOLE:24] "[PAIR] pc.hasVF=object", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.004:INFO:CONSOLE:24] "[PAIR] pc.pill.webrtc=点对点 已连", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.004:INFO:CONSOLE:24] "[PAIR] pc.pill.mqtt=中转 已连", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.006:INFO:CONSOLE:24] "[PAIR] pc.pill.data=手机在线", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.006:INFO:CONSOLE:24] "[PAIR] pc.stat.primaryChannel=WebRTC", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] pc.stat.rtt=0 ms", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] pc.stat.packets=12", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] pc.stat.fps=60", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] pc.peerActive=true", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] pc.orientCount=12", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] pc.duplicates=27", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] pc.received=29", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] pc.channelStates={"webrtc":"open","mqtt":"open"}", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] ph.pill.link=已连上电脑", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] ph.pill.room=房间 7777", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] ph.sent=13", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] ph.log=[00:50:17] 开始连接房间 7777 || [00:50:17] 手机端已就绪", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] ph.padFound=true", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.007:INFO:CONSOLE:24] "[PAIR] pose.beforeNudge=0.0000,0.0000,0.0000,1.0000", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005030.916:INFO:CONSOLE:24] "[PAIR] pose.duringNudge.offsetIndicator=present", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005031.828:INFO:CONSOLE:24] "[PAIR] pose.afterNudge=0.0000,-0.6249,0.0000,0.7807", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005031.828:INFO:CONSOLE:24] "[PAIR] pose.afterNudgeIdle=false", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005031.828:INFO:CONSOLE:24] "[PAIR] pc.orientCountAfterNudge=125", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005033.413:INFO:CONSOLE:24] "[PAIR] pose.afterDrag=-0.0586,-0.4581,-0.0303,0.8864", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005034.629:INFO:CONSOLE:24] "[PAIR] pc.gainAfterPhoneSlider=1.8", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005034.629:INFO:CONSOLE:24] "[PAIR] pc.gainSliderUi=1.8", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005034.629:INFO:CONSOLE:24] "[PAIR] pc.gainLabelUi=1.80×", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:20624:1024/005034.629:INFO:CONSOLE:24] "[PAIR] === SUMMARY ===
+pc.hasVF=object
+pc.pill.webrtc=点对点 已连
+pc.pill.mqtt=中转 已连
+pc.pill.data=手机在线
+pc.stat.primaryChannel=WebRTC
+pc.stat.rtt=0 ms
+pc.stat.packets=12
+pc.stat.fps=60
+pc.peerActive=true
+pc.orientCount=12
+pc.duplicates=27
+pc.received=29
+pc.channelStates={"webrtc":"open","mqtt":"open"}
+ph.pill.link=已连上电脑
+ph.pill.room=房间 7777
+ph.sent=13
+ph.log=[00:50:17] 开始连接房间 7777 || [00:50:17] 手机端已就绪
+ph.padFound=true
+pose.beforeNudge=0.0000,0.0000,0.0000,1.0000
+pose.duringNudge.offsetIndicator=present
+pose.afterNudge=0.0000,-0.6249,0.0000,0.7807
+pose.afterNudgeIdle=false
+pc.orientCountAfterNudge=125
+pose.afterDrag=-0.0586,-0.4581,-0.0303,0.8864
+pc.gainAfterPhoneSlider=1.8
+pc.gainSliderUi=1.8
+pc.gainLabelUi=1.80×", source: http://127.0.0.1:8123/tools/_pair.html?run=1 (24)
+[17508:37912:1024/005035.103:ERROR:chrome\updater\ipc\update_service_dialer_win.cc:76] Failed to open named pipe server process 33552: 拒绝访问。 (0x5)
+[17508:38212:1024/005035.104:ERROR:chrome\updater\ipc\update_service_dialer_win.cc:76] Failed to open named pipe server process 33552: 拒绝访问。 (0x5)
+[17508:37912:1024/005037.183:ERROR:chrome\updater\ipc\update_service_dialer_win.cc:76] Failed to open named pipe server process 37084: 拒绝访问。 (0x5)
+[17508:38212:1024/005037.244:ERROR:chrome\updater\ipc\update_service_dialer_win.cc:76] Failed to open named pipe server process 38444: 拒绝访问。 (0x5)
+[17508:37912:1024/005039.324:ERROR:chrome\updater\ipc\update_service_dialer_win.cc:76] Failed to open named pipe server process 34476: 拒绝访问。 (0x5)

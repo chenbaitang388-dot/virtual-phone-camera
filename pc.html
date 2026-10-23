@@ -294,6 +294,23 @@ function onMessage(msg) {
     if (msg.from === 'phone' && demoRunning) stopDemo('真手机已接入，演示模式自动关闭');
     return;
   }
+  if (msg.t === MSG.CTRL) {
+    // 手机端只能调灵敏度、只能请求重新校准，真正的执行都在这里。
+    if (Number.isFinite(msg.gain)) {
+      const gain = Math.min(2.4, Math.max(0.4, msg.gain));
+      smoother.gain = gain;
+      $('#rng-gain').value = String(gain);
+      $('#val-gain').textContent = `${gain.toFixed(2)}×`;
+      log.info(`手机端把灵敏度改成 ${gain.toFixed(2)}×`);
+    }
+    if (msg.recenter === true) {
+      smoother.calibrate();
+      studio.snapOrientation();
+      log.info('手机端请求重新校准');
+      toast('手机端已重新校准');
+    }
+    return;
+  }
   if (msg.t === MSG.HELLO) {
     log.ok(`手机端已接入房间 ${room}`);
     toast('手机已连接，转动手机试试');
