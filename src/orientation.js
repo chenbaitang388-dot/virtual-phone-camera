@@ -115,6 +115,9 @@ export class OrientationSmoother {
     this._calib = new THREE.Quaternion();
     this._calibInverse = new THREE.Quaternion();
     this._prev = new THREE.Quaternion();
+    // 上一帧"测量"到的相对量（未外推）。角速度必须由它算，不能用已外推的 target，
+    // 否则外推量会被当成运动、下一帧差分反向，导致速率虚假放大与来回抖动。
+    this._prevRelative = new THREE.Quaternion();
     this._lastSource = new THREE.Quaternion();
     this._hasSource = false;
     this._hasPrev = false;
@@ -136,6 +139,7 @@ export class OrientationSmoother {
     this.calibrated = true;
     this.target.identity();
     this.current.identity();
+    this._prevRelative.identity();
     this._hasPrev = false;
   }
 
@@ -161,8 +165,14 @@ export class OrientationSmoother {
 
     if (this._hasPrev) {
       const dt = Math.max(1e-3, (nowMs - this._prevAt) / 1000);
-      const delta = this.target.clone().invert().multiply(relative);
-      const halfAngle = Math.acos(Math.min(1, Math.abs(delta.w)));
+      // 差分参考上一帧"测量"相对量，而不是已外推的 target：
+      // 否则外推量会被算进 delta，速率被放大、轴甚至反向，预测来回抖。
+      const delta = this._prevRelative.clone().invert().multiply(relative);
+      // relative 的 "w 取正" 会在旋转跨过 180° 时把四元数整体变号，
+      // 于是这里的 delta 可能被带上一个多余负号，令轴反向、外推抖动。
+      // 先把 delta 归一到 w>=0（最短路径），再取轴与半角，两者才自洽。
+      if (delta.w < 0) delta.set(-delta.x, -delta.y, -delta.z, -delta.w);
+      const halfAngle = Math.acos(Math.min(1, delta.w));
       const sin = Math.sin(halfAngle);
       if (sin > 1e-5) {
         this._axis.set(delta.x, delta.y, delta.z).divideScalar(sin);
@@ -185,6 +195,7 @@ export class OrientationSmoother {
     }
 
     this._prev.copy(this.target);
+    this._prevRelative.copy(relative);
     this._prevAt = nowMs;
     this._hasPrev = true;
     this.target.copy(this.predicted);

@@ -2,3 +2,9 @@ __pycache__/
 *.pyc
 .DS_Store
 .shots/
+
+# 本地联调时用的临时探针页与日志，不要发布到站点上
+tools/_*.html
+*.log
+*.err
+math.html

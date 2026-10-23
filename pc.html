@@ -216,7 +216,7 @@ import { DualTransport } from './src/transport.js';
 import { OrientationSmoother } from './src/orientation.js';
 import { CanvasRecorder, recorderSupport } from './src/recorder.js';
 import { renderQr } from './src/qr.js';
-import { MSG, randomRoom, normalizeRoom, isValidRoom } from './src/protocol.js';
+import { MSG, randomRoom, normalizeRoom, isValidRoom, isFiniteQuaternion } from './src/protocol.js';
 import {
   $, createLogger, createToast, setPill, copyText, downloadBlob,
   fmtClock, fmtBytes, timestampName, toggleFullscreen,
@@ -281,13 +281,36 @@ function pillState(state) {
   return 'warn';
 }
 
+const lastDetail = { webrtc: '', mqtt: '' };
+
 function paintStatus(snap) {
   setPill($('#pill-webrtc'), pillState(snap.webrtc.state), `点对点 ${STATE_LABEL[snap.webrtc.state] || snap.webrtc.state}`);
   setPill($('#pill-mqtt'), pillState(snap.mqtt.state), `中转 ${STATE_LABEL[snap.mqtt.state] || snap.mqtt.state}`);
+
+  // 胶囊位置只放得下状态词，具体原因（比如"房间码被占用"）写进日志，
+  // 否则连不上时用户完全看不出是被别人占了房间。
+  const names = { webrtc: '点对点', mqtt: '中转' };
+  for (const key of ['webrtc', 'mqtt']) {
+    const detail = snap[key].detail;
+    if (!detail || detail === lastDetail[key]) continue;
+    lastDetail[key] = detail;
+    log.info(`${names[key]}：${detail}`);
+  }
 }
 
+let badPacketWarned = false;
+
 function onMessage(msg) {
-  if (msg.t === MSG.ORIENT && Array.isArray(msg.q) && msg.q.length === 4) {
+  if (msg.t === MSG.ORIENT) {
+    // 四元数必须是 4 个有限数。放 NaN 进去会污染平滑器和相机矩阵，
+    // 画面会永久变黑，而且后面再收到合法数据也救不回来。
+    if (!isFiniteQuaternion(msg.q)) {
+      if (!badPacketWarned) {
+        badPacketWarned = true;
+        log.warn('收到格式非法的姿态数据，已丢弃（画面不受影响）');
+      }
+      return;
+    }
     incoming.fromArray(msg.q);
     smoother.push(incoming, performance.now());
     lastOrientationAt = performance.now();
@@ -519,9 +542,11 @@ $('#btn-again').addEventListener('click', () => {
   downloadBlob(blob, $('#result-panel').dataset.filename || timestampName('虚拟手机录制', 'webm'));
 });
 
-// 空格键开始 / 停止录制
+// 空格键开始 / 停止录制（焦点在表单控件或按钮上时不抢键）
 window.addEventListener('keydown', (e) => {
-  if (e.code !== 'Space' || e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+  if (e.code !== 'Space') return;
+  const tag = e.target instanceof Element ? e.target.tagName : '';
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'TEXTAREA') return;
   e.preventDefault();
   recorder.recording ? recorder.stop() : startRecording();
 });

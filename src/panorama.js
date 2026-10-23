@@ -211,14 +211,17 @@ function drawStars(ctx, w, h, rnd, count) {
     const x = rnd() * w;
     const y = rnd() * maxY;
     const r = 2 + rnd() * 4;
-    const g = ctx.createRadialGradient(x, y, 0, x, y, r * 3);
-    g.addColorStop(0, 'rgba(255,255,255,0.9)');
-    g.addColorStop(0.4, 'rgba(200,220,255,0.35)');
-    g.addColorStop(1, 'rgba(180,200,255,0)');
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(x, y, r * 3, 0, TAU);
-    ctx.fill();
+    // 亮点光晕半径可达 r*3，若贴近左右边缘会被切断产生硬接缝，因此同样做环绕副本。
+    drawAtAllWraps(x, w, (cx) => {
+      const g = ctx.createRadialGradient(cx, y, 0, cx, y, r * 3);
+      g.addColorStop(0, 'rgba(255,255,255,0.9)');
+      g.addColorStop(0.4, 'rgba(200,220,255,0.35)');
+      g.addColorStop(1, 'rgba(180,200,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(cx, y, r * 3, 0, TAU);
+      ctx.fill();
+    });
   }
   ctx.restore();
 }

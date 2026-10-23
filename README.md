@@ -27,7 +27,7 @@ flowchart LR
 几点说明：
 
 - **双通道并发 + 按序号去重**：手机端把自己的设备朝向，**同时**用 WebRTC（PeerJS 数据通道，点对点）和 MQTT over WSS（公共 broker 中转）发出去。电脑端两条通道都监听，按消息里的自增 `seq` 去重，谁先到就用谁。这样做的好处是不需要双方协商走哪条路，只要任意一条通就可用，两条自动互为备份。
-- **配对方式**：电脑端生成一个 4 位数字房间号并显示二维码；手机端扫二维码或手动输入房间号即可连接。
+- **配对方式**：电脑端生成一个 6 位房间码并显示二维码；手机端扫二维码或手动输入房间码即可连接。房间码用的是 31 个不容易看错的字符（去掉了 `0 o 1 l i`）取 6 位，约 8.9 亿种组合。
 - **平滑**：电脑端收到朝向后，用四元数 + 球面线性插值（slerp）做平滑，抵消网络抖动带来的卡顿。
 
 ---
@@ -36,9 +36,9 @@ flowchart LR
 
 ### 在线用法（推荐）
 
-1. 电脑浏览器打开 `<你的站点地址>/pc.html`。页面会显示一个 **4 位数字房间号**和一张二维码。
+1. 电脑浏览器打开 `<你的站点地址>/pc.html`。页面会显示一个 **6 位房间码**和一张二维码。
 2. 手机浏览器打开**同一个站点**的 `/phone.html`。
-3. 用手机扫电脑上的二维码，或者手动输入那 4 位房间号，完成连接。
+3. 用手机扫电脑上的二维码，或者手动输入那 6 位房间码，完成连接。
 4. 在手机上点「启用陀螺仪」。
    - iOS 上**必须**点这个按钮（出于隐私，系统要求用户手势才能授权），而且页面必须是 HTTPS。
 5. 电脑上按「开始录制」即可。录制结束后会下载一个 `.webm` 文件。
@@ -97,10 +97,10 @@ git push -u origin main
 两个前提要同时满足：页面必须是 **HTTPS**（GitHub Pages 自带，所以用 Pages 就没问题），并且要由**用户手势**去触发 `DeviceOrientationEvent.requestPermission()`。页面右上有「启用陀螺仪」按钮，先点一次它。另外请在 iOS 的「设置 → Safari → 动作与方向访问」里把开关打开。
 
 **手机和电脑连不上？**
-本项目是双通道设计，WebRTC 和 MQTT 任意一条通就能用。可以这样排查：确认手机是联网状态；公共 MQTT broker 偶尔不稳定，等一会儿它会自动重连；再确认两边的**房间号完全一致**（4 位数字）。
+本项目是双通道设计，WebRTC 和 MQTT 任意一条通就能用。可以这样排查：确认手机是联网状态；公共 MQTT broker 偶尔不稳定，等一会儿它会自动重连；再确认两边的**房间码完全一致**（6 位字母数字）。点对点一旦连上，中转通道会自动暂停（见右侧日志里的「中转」那一行），这是正常的。
 
-**只有 2 个数字的房间号输不进去？**
-房间号固定是 4 位数字，请完整输入 4 位。
+**只有 2 个数字的房间号连不上？**
+房间码是 6 位字母数字，字符集去掉了 `0`、`o`、`1`、`l`、`i` 这些容易看错的字符，字母大小写都行（会自动转小写）。不满 6 位时点「连接电脑」会提示并且不会连接，请补齐。如果你在网址里多输了字符，页面只会保留前 6 个有效字符，请核对是否和电脑端显示的一致。
 
 **录出来的视频打不开，或者后缀是 `.webm`？**
 `.webm` 用 Chrome / Edge 就能播放。如果要用其他软件或设备播放，可以用 ffmpeg 转成 mp4：
@@ -125,7 +125,7 @@ ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p out.mp4
 | `pc.html` | 电脑端页面：3D 视口、虚拟手机、连接面板与录制按钮。 |
 | `phone.html` | 手机端页面：读取陀螺仪并发送朝向的遥控器。 |
 | `src/` | 页面用到的 JavaScript 源码（Three.js 场景、连接、录制等）。 |
-| `vendor/` | 内嵌的第三方库：`three.module.js`、`OrbitControls.js`、`peerjs.min.js`、`mqtt.min.js`。 |
+| `vendor/` | 内嵌的第三方库：`three.module.js`（转发层，真正实现在 `three.core.min.js`）、`OrbitControls.js`、`peerjs.min.js`、`mqtt.min.js`、`qrcode.min.js`。 |
 | `assets/css/style.css` | 页面样式表。 |
 | `tools/serve.py` | 本地静态测试服务器，供局域网联调使用。 |
 | `.github/workflows/pages.yml` | GitHub Actions 部署到 GitHub Pages 的流水线。 |
@@ -134,7 +134,7 @@ ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p out.mp4
 
 ## 技术栈与限制
 
-- **依赖已内嵌在本仓库**：`three.module.js`、`OrbitControls.js`、`peerjs.min.js`、`mqtt.min.js` 都放在 `vendor/` 里，运行时不再从 CDN 拉取，国内访问更稳、也不会因为 CDN 抽风而白屏。
+- **依赖已内嵌在本仓库**：`three.module.js`（只是转发层，真正的实现放在同目录的 `three.core.min.js`）、`OrbitControls.js`、`peerjs.min.js`、`mqtt.min.js`、`qrcode.min.js` 都放在 `vendor/` 里，运行时不再从 CDN 拉取，国内访问更稳、也不会因为 CDN 抽风而白屏。
 - **无构建步骤**：没有打包、编译、npm 安装这些环节，改完文件直接刷新即可，部署也只需要原样上传。
 - **浏览器要求**：需要支持 WebRTC 和 ES Modules 的现代浏览器（较新的 Chrome / Edge / Safari / Firefox）。一些老旧的国产内核浏览器可能不支持 ES Modules。
 - **iOS 需要 HTTPS**：iOS 只在 HTTPS 页面下才允许读取陀螺仪，并且必须由用户手势触发授权按钮。请使用 GitHub Pages 提供的 HTTPS 地址访问。

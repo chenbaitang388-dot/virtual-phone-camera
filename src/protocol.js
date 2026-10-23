@@ -9,18 +9,41 @@ export const MSG = Object.freeze({
   PONG: 'pong',
 });
 
-// 4 位数字房间号是双方唯一的配对凭据。
+// 房间码用的字符集：去掉 0/o/1/l/i 这些容易看错的字符，降低手输出错率。
+// 31 个字符取 6 位 ≈ 8.9 亿种组合，比 4 位数字（9000 种）难猜得多 ——
+// 公共 MQTT broker 没有鉴权，房间码本身就是唯一的"密钥"。
+const CODE_ALPHABET = '23456789abcdefghjkmnpqrstuvwxyz';
+const CODE_LENGTH = 6;
+
 export function randomRoom() {
-  return String(1000 + Math.floor(Math.random() * 9000));
+  const bytes = new Uint8Array(CODE_LENGTH);
+  if (globalThis.crypto?.getRandomValues) {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < CODE_LENGTH; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  let out = '';
+  for (let i = 0; i < CODE_LENGTH; i++) out += CODE_ALPHABET[bytes[i] % CODE_ALPHABET.length];
+  return out;
 }
 
+// 用户手输时统一成小写，并丢掉字符集之外的字符（比如误输的连字符）。
 export function normalizeRoom(value) {
-  return String(value ?? '').replace(/\D/g, '').slice(0, 4);
+  const raw = String(value ?? '').toLowerCase();
+  let out = '';
+  for (const ch of raw) {
+    if (CODE_ALPHABET.includes(ch)) out += ch;
+    if (out.length >= CODE_LENGTH) break;
+  }
+  return out;
 }
 
 export function isValidRoom(value) {
-  return /^\d{4}$/.test(String(value));
+  return typeof value === 'string' && value.length === CODE_LENGTH &&
+    [...value].every((ch) => CODE_ALPHABET.includes(ch));
 }
+
+export const ROOM_LENGTH = CODE_LENGTH;
 
 // 两个方向用不同 topic，这样 MQTT 上不会自己收到自己发的包。
 export function topicUp(room) {
@@ -31,7 +54,7 @@ export function topicDown(room) {
   return `videoflow/v${PROTO_VERSION}/${room}/down`;
 }
 
-// PeerJS 的 peer id 由房间号推导，双方无需额外交换连接码。
+// PeerJS 的 peer id 由房间码推导，双方无需额外交换连接码。
 export function peerIdFor(room) {
   return `videoflow-pc-${room}`;
 }
@@ -49,4 +72,12 @@ export function decode(raw) {
   } catch {
     return null;
   }
+}
+
+// 四元数必须由 4 个有限数组成。收到不合规的值时必须丢掉，
+// 否则 NaN 会钻进平滑器和相机矩阵，画面永久变黑且刷新才能恢复。
+export function isFiniteQuaternion(value) {
+  return Array.isArray(value) && value.length === 4 &&
+    Number.isFinite(value[0]) && Number.isFinite(value[1]) &&
+    Number.isFinite(value[2]) && Number.isFinite(value[3]);
 }

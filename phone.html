@@ -29,14 +29,15 @@
       <div class="panel__title">1 · 配对电脑</div>
       <div class="panel__body">
         <div class="field">
-          <label class="field__label" for="code">电脑端显示的 4 位房间号</label>
-          <input class="input code-input" id="code" inputmode="numeric" autocomplete="off"
-                 maxlength="4" placeholder="0000" />
+          <label class="field__label" for="code">电脑端显示的 6 位房间码</label>
+          <input class="input code-input" id="code" autocomplete="off" autocapitalize="off"
+                 autocorrect="off" spellcheck="false" maxlength="6" placeholder="k7m2qp" />
         </div>
         <button class="btn btn--primary btn--block" id="btn-connect">连接电脑</button>
         <div class="help" id="setup-help">
-          电脑端页面上会显示一个 4 位房间号和一个二维码。
-          最省事的做法是用手机相机直接扫那个二维码，会自动把房间号填好并打开这个页面。
+          电脑端页面上会显示一个 6 位房间码和一个二维码。
+          最省事的做法是用手机相机直接扫那个二维码，会自动把房间码填好并打开这个页面，
+          不用手输。
         </div>
       </div>
     </section>
@@ -111,11 +112,9 @@ let transport = null;
 
 const STATE_LABEL = { idle: '待机', connecting: '连接中', open: '已连', failed: '不可用' };
 
-transport = new DualTransport({ room: normalizeRoom(params.get('room')) || '0000', role: 'phone' });
-
 function connect(code) {
   if (!isValidRoom(code)) {
-    toast('房间号是 4 位数字', 'err');
+    toast('房间码是 6 位字母数字，请核对电脑端显示的那串', 'err');
     return;
   }
   if (transport) transport.close();
@@ -149,19 +148,27 @@ function onMessage(msg, channel) {
 function paintStatus(snap) {
   const active = snap.peerActive;
   setPill($('#pill-link'), active ? 'ok' : (snap.anyChannelOpen ? 'warn' : 'bad'),
-    active ? '已连上电脑' : (snap.anyChannelOpen ? '等待电脑应答' : '未连接'));
+    active ? '已连上电脑' : (snap.anyChannelOpen ? '等待电脑响应' : '未连接'));
   const roomPill = $('#pill-room');
+  const roomLabel = isValidRoom(snap.room) ? `房间 ${snap.room}` : '未配对';
   if (Number.isFinite(snap.stats.rtt)) {
-    setPill(roomPill, 'ok', `房间 ${snap.room} · ${snap.stats.rtt.toFixed(0)}ms`);
+    setPill(roomPill, 'ok', `${roomLabel} · ${snap.stats.rtt.toFixed(0)}ms`);
   } else {
-    setPill(roomPill, isValidRoom(snap.room) ? 'ok' : 'warn', `房间 ${snap.room}`);
+    setPill(roomPill, isValidRoom(snap.room) ? 'ok' : 'warn', roomLabel);
   }
 }
+
+// onStatus 只在通道状态变化时触发，但"电脑端是否在响应"是随时间变化的，
+// 所以要自己定时重画一次，否则胶囊可能一直停在过期的文案上。
+setInterval(() => {
+  if (transport) paintStatus(transport.snapshot());
+}, 500);
 
 if (isValidRoom($('#code').value)) {
   connect($('#code').value);
 } else {
-  log.info('等待输入电脑端显示的 4 位房间号');
+  log.info('等待输入电脑端显示的 6 位房间码，或直接用手机相机扫电脑上的二维码');
+  $('#setup-help').textContent = '扫二维码会自带房间码，不用手输；手输的话要 6 位字母数字，字母大小写都可以。';
 }
 
 $('#btn-connect').addEventListener('click', () => connect(normalizeRoom($('#code').value)));
@@ -199,6 +206,15 @@ $('#btn-gyro').addEventListener('click', async () => {
     log.ok('陀螺仪已开启');
     toast('陀螺仪已开启');
     navigator.vibrate?.(60);
+    // 授权成功不等于真的有传感器（部分平板/模拟器会"批准但不供数据"），
+    // 所以等一下再确认一次，别让用户以为是别的地方坏了。
+    setTimeout(() => {
+      if (source.hasData) return;
+      $('#gyro-help').textContent =
+        '陀螺仪权限已通过，但收不到传感器数据。这台设备可能没有方向传感器，' +
+        '用下面的方向键或直接在空白处拖动也能转视角。';
+      log.warn('已授权但 1.5 秒内没收到 deviceorientation 数据，可能没有传感器');
+    }, 1500);
   } catch (err) {
     log.err(`开启陀螺仪失败：${err.message}`);
     toast(err.message, 'err');

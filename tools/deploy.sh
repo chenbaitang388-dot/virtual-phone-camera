@@ -56,7 +56,7 @@ if git remote get-url origin > /dev/null 2>&1; then
 else
   git remote add origin "https://github.com/$OWNER/$REPO_NAME.git"
 fi
-git push -u origin main --force-with-lease
+git push -u origin main
 
 # 4) 把 Pages 的发布来源设为 GitHub Actions
 #    仓库刚建好时 Pages 还没启用，这一步让它启用；已启用则会报 409，忽略即可。

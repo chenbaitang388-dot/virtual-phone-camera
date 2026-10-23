@@ -17,6 +17,7 @@ const RTC_CONFIG = {
 };
 
 const PEER_ATTEMPT_LIMIT = 20;
+const PEER_STABLE_MS = 5000;
 const DEDUPE_WINDOW = 1500;
 const PEER_ACTIVE_MS = 3000;
 
@@ -34,9 +35,10 @@ export class DualTransport {
     this.stats = {
       received: 0,
       duplicates: 0,
+      rejected: 0,
       sent: 0,
       lastSeq: -1,
-      lastAt: 0,
+      lastAt: -1e9,   // 哨兵值：未收到任何消息前 peerActive 必须为 false
       rtt: null,
       primaryChannel: '',
       orientCount: 0,
@@ -56,6 +58,11 @@ export class DualTransport {
     this._mqttSwitching = false;
     this._rtcAttempts = 0;
     this._rtcRetryTimer = 0;
+    // 点对点直连一旦稳定建立，就停用中转通道：
+    // 公共 MQTT broker 没有鉴权，任何人订阅通配 topic 都能看到并伪造姿态数据。
+    // 直连是加密的点对点通道，正常情况下不该再往公共服务器上发任何姿态。
+    this._relayActive = true;
+    this._mqttBaseDetail = '';
   }
 
   // ---- 对外接口 ----------------------------------------------------------
@@ -154,7 +161,7 @@ export class DualTransport {
   _dispatch(text) {
     let delivered = false;
     const client = this._mqttClient;
-    if (client && this.status.mqtt.state === 'open') {
+    if (this._relayActive && client && this.status.mqtt.state === 'open') {
       try {
         client.publish(this.isPhone ? topicUp(this.room) : topicDown(this.room), text, { qos: 0, retain: false });
         delivered = true;
@@ -173,13 +180,39 @@ export class DualTransport {
     if (cur.state === state && cur.detail === detail) return;
     cur.state = state;
     cur.detail = detail;
+    if (channel === 'webrtc') this._syncRelay();
     const snap = this.snapshot();
     this._statusHandlers.forEach((fn) => { try { fn(snap); } catch (e) { console.error(e); } });
+  }
+
+  // 直连可用就把中转关掉（发送侧停发，接收侧也忽略中转来的包），
+  // 直连断了再自动打开，保证"任一条路通就能用"这个前提不被破坏。
+  _syncRelay() {
+    const direct = this.status.webrtc.state === 'open' && this._conns.size > 0;
+    const want = !direct;
+    if (want === this._relayActive) return;
+    this._relayActive = want;
+    this._setMqttStatus(this.status.mqtt.state, this._mqttBaseDetail || '');
+  }
+
+  // 中转通道的说明要同时反映两件事：broker 连得怎么样，以及是否因为
+  // 直连可用而主动停用。broker 自己的事件随时会刷新说明，所以统一从这一个出口走。
+  _setMqttStatus(state, baseDetail) {
+    this._mqttBaseDetail = baseDetail;
+    const detail = this._relayActive ? baseDetail : '已暂停（点对点直连中）';
+    this._setStatus('mqtt', state, detail);
   }
 
   _ingest(text, channel) {
     const msg = decode(text);
     if (!msg) return;
+
+    // 直连已经可用时，中转通道来的包一律不采信：
+    // 公共 broker 上任何人都能往这个 topic 发东西，不能让第三方劫持姿态。
+    if (channel === 'mqtt' && !this._relayActive) {
+      this.stats.rejected++;
+      return;
+    }
 
     const seq = msg.seq;
     if (Number.isFinite(seq)) {
@@ -203,7 +236,8 @@ export class DualTransport {
     if (msg.t === MSG.PING) {
       this.send(MSG.PONG, { echo: msg.ts });
     } else if (msg.t === MSG.PONG && Number.isFinite(msg.echo)) {
-      this.stats.rtt = Math.max(0, performance.now() - msg.echo);
+      // echo 是本端 PING 时写入的 Date.now()，必须用同一时钟相减，否则 RTT 恒为 0。
+      this.stats.rtt = Math.max(0, Date.now() - msg.echo);
     } else if (msg.t === MSG.HELLO && !this.isPhone) {
       this._setStatus('webrtc', this.status.webrtc.state === 'open' ? 'open' : this.status.webrtc.state, '手机已接入');
     }
@@ -262,7 +296,8 @@ export class DualTransport {
       }
       this._setStatus('webrtc', 'failed', type === 'network' ? '信令服务器不可达' : String(type || '连接失败'));
       this._later(() => {
-        if (this._closed || this.status.webrtc.state === 'open') return;
+        // 同一个 peer 反复报错会排出多个重启定时器；若期间已有新 peer 接替就跳过，避免堆叠实例。
+        if (this._closed || this._peer !== peer || this.status.webrtc.state === 'open') return;
         try { peer.destroy(); } catch { /* 已销毁 */ }
         this._openPeerAsHost();
       }, 6000);
@@ -292,7 +327,10 @@ export class DualTransport {
       conn.on('open', () => {
         this._conns.add(conn);
         this._wireConn(conn);
-        this._rtcAttempts = 0;
+        // 连接稳定存活一段时间后才清零计数；若一 open 就清零，反复 open/close 会冲掉重试上限。
+        this._later(() => {
+          if (this._conns.has(conn) && conn.open) this._rtcAttempts = 0;
+        }, PEER_STABLE_MS);
         this._setStatus('webrtc', 'open', '点对点已直连');
         this.send(MSG.HELLO);
       });
@@ -351,11 +389,11 @@ export class DualTransport {
 
   _startMqtt() {
     if (typeof window.mqtt === 'undefined') {
-      this._setStatus('mqtt', 'failed', 'mqtt.js 未加载');
+      this._setMqttStatus( 'failed', 'mqtt.js 未加载');
       return;
     }
     const url = MQTT_BROKERS[this._mqttBrokerIndex];
-    this._setStatus('mqtt', 'connecting', url);
+    this._setMqttStatus( 'connecting', url);
 
     let client;
     try {
@@ -379,8 +417,8 @@ export class DualTransport {
       this._mqttSwitching = false;
       const topic = this.isPhone ? topicDown(this.room) : topicUp(this.room);
       client.subscribe(topic, { qos: 0 }, (err) => {
-        if (err) this._setStatus('mqtt', 'failed', '订阅失败');
-        else this._setStatus('mqtt', 'open', url.replace('wss://', ''));
+        if (err) this._setMqttStatus( 'failed', '订阅失败');
+        else this._setMqttStatus( 'open', url.replace('wss://', ''));
       });
     });
 
@@ -388,13 +426,13 @@ export class DualTransport {
 
     client.on('error', () => {
       if (!everConnected) this._switchBroker();
-      else this._setStatus('mqtt', 'connecting', '中转连接异常，重连中');
+      else this._setMqttStatus( 'connecting', '中转连接异常，重连中');
     });
 
     client.on('close', () => {
       if (!this._closed && !everConnected) return;
       if (!this._closed && this.status.mqtt.state === 'open') {
-        this._setStatus('mqtt', 'connecting', '中转断开，重连中');
+        this._setMqttStatus( 'connecting', '中转断开，重连中');
       }
     });
   }
@@ -402,7 +440,7 @@ export class DualTransport {
   _switchBroker() {
     if (this._closed || this._mqttSwitching) return;
     if (this._mqttBrokerIndex >= MQTT_BROKERS.length - 1) {
-      this._setStatus('mqtt', 'failed', '两个中转服务器都没连上');
+      this._setMqttStatus( 'failed', '两个中转服务器都没连上');
       return;
     }
     this._mqttSwitching = true;
@@ -412,7 +450,7 @@ export class DualTransport {
     if (old) {
       try { old.removeAllListeners(); old.end(true); } catch { /* 已关闭 */ }
     }
-    this._setStatus('mqtt', 'connecting', `切换中转服务器…`);
+    this._setMqttStatus( 'connecting', `切换中转服务器…`);
     this._later(() => { this._mqttSwitching = false; this._startMqtt(); }, 400);
   }
 }
