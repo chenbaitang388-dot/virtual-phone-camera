@@ -4,6 +4,16 @@
 
 整个项目是一个**纯静态网站**，没有构建步骤，直接把文件部署到 GitHub Pages 就能用。
 
+已经在线的站点：
+
+| | 地址 |
+|---|---|
+| 入口 | <https://chenbaitang388-dot.github.io/virtual-phone-camera/> |
+| 电脑端 | <https://chenbaitang388-dot.github.io/virtual-phone-camera/pc.html> |
+| 手机端 | <https://chenbaitang388-dot.github.io/virtual-phone-camera/phone.html> |
+
+手机端**必须**从这个 HTTPS 地址打开，因为浏览器只在 HTTPS 页面里才允许读取陀螺仪。
+
 ---
 
 ## 它是怎么工作的

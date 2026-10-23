@@ -83,4 +83,4 @@ echo "电脑端：https://$OWNER.github.io/$REPO_NAME/pc.html"
 echo "手机端：https://$OWNER.github.io/$REPO_NAME/phone.html"
 echo
 echo "注意：第一次部署需要几分钟。部署好后用手机打开上面的 /phone.html 时，"
-echo "记得先把电脑端页面上显示的 4 位房间号核一遍。"
+echo "记得先把电脑端页面上显示的 6 位房间码核一遍。"
