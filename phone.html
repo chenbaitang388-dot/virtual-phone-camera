@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0b0e14" />
+<title>手机端 · 虚拟手机摄像头遥控器</title>
+<link rel="stylesheet" href="./assets/css/style.css" />
+<script src="./vendor/peerjs.min.js"></script>
+<script src="./vendor/mqtt.min.js"></script>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+</head>
+<body>
+<div class="app app--phone">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-logo">◉</span>
+      <b>遥控器</b>
+    </div>
+    <div class="spacer"></div>
+    <span class="pill" id="pill-room"><span class="dot dot--warn"></span><span class="pill__text">未配对</span></span>
+    <span class="pill" id="pill-link"><span class="dot dot--bad"></span><span class="pill__text">未连接</span></span>
+  </header>
+
+  <main class="main">
+    <section class="panel" id="setup-panel">
+      <div class="panel__title">1 · 配对电脑</div>
+      <div class="panel__body">
+        <div class="field">
+          <label class="field__label" for="code">电脑端显示的 4 位房间号</label>
+          <input class="input code-input" id="code" inputmode="numeric" autocomplete="off"
+                 maxlength="4" placeholder="0000" />
+        </div>
+        <button class="btn btn--primary btn--block" id="btn-connect">连接电脑</button>
+        <div class="help" id="setup-help">
+          电脑端页面上会显示一个 4 位房间号和一个二维码。
+          最省事的做法是用手机相机直接扫那个二维码，会自动把房间号填好并打开这个页面。
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__title">2 · 陀螺仪</div>
+      <div class="panel__body">
+        <button class="btn btn--primary btn--block" id="btn-gyro">启用陀螺仪</button>
+        <div class="help" id="gyro-help">
+          iPhone 上必须点一下这个按钮，而且页面必须是
+          <b>HTTPS</b>（部署到 GitHub Pages 的网址就是 HTTPS）。
+          没有陀螺仪也能玩，用下面的方向键或直接拖动画面。
+        </div>
+
+        <div class="grid-stats">
+          <div class="stat"><span class="stat__k">左右 α</span><span class="stat__v" id="v-alpha">—</span></div>
+          <div class="stat"><span class="stat__k">俯仰 β</span><span class="stat__v" id="v-beta">—</span></div>
+          <div class="stat"><span class="stat__k">翻滚 γ</span><span class="stat__v" id="v-gamma">—</span></div>
+          <div class="stat"><span class="stat__k">已发送</span><span class="stat__v" id="v-sent">0</span></div>
+        </div>
+
+        <canvas id="horizon" aria-label="姿态指示仪"></canvas>
+
+        <div class="field">
+          <label class="field__label" for="rng-gain">灵敏度 <span class="mono" id="v-gain">1.00×</span></label>
+          <input class="range" id="rng-gain" type="range" min="0.4" max="2.4" step="0.05" value="1" />
+        </div>
+
+        <div class="row">
+          <button class="btn btn--ghost btn--sm" id="btn-recal">把当前朝向设为正前方</button>
+          <button class="btn btn--ghost btn--sm" id="btn-pause">暂停发送</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="pad" id="pad">
+      <div class="pad__zone pad__zone--up" data-dir="up">↑ 抬头</div>
+      <div class="pad__zone pad__zone--left" data-dir="left">← 左看</div>
+      <div class="pad__zone pad__zone--center" data-dir="center">回正</div>
+      <div class="pad__zone pad__zone--right" data-dir="right">右看 →</div>
+      <div class="pad__zone pad__zone--down" data-dir="down">↓ 低头</div>
+      <span class="pad__hint" style="grid-column:1/-1;grid-row:4;">在空白处拖动也能转视角 · 方向键可按住连续微调</span>
+    </section>
+
+    <details class="panel">
+      <summary class="panel__title" style="cursor:pointer;list-style:none;">日志</summary>
+      <div class="panel__body">
+        <div class="log" id="log"></div>
+      </div>
+    </details>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { DualTransport } from './src/transport.js';
+import { MSG, normalizeRoom, isValidRoom } from './src/protocol.js';
+import { OrientationSource, needsPermissionGesture, supportsDeviceOrientation } from './src/orientation.js';
+import { $, createLogger, createToast, setPill } from './src/ui.js';
+
+const log = createLogger($('#log'));
+const toast = createToast($('#toast'));
+
+// ---- 配对 ---------------------------------------------------------------
+
+const params = new URLSearchParams(location.search);
+$('#code').value = normalizeRoom(params.get('room'));
+
+let transport = null;
+
+const STATE_LABEL = { idle: '待机', connecting: '连接中', open: '已连', failed: '不可用' };
+
+transport = new DualTransport({ room: normalizeRoom(params.get('room')) || '0000', role: 'phone' });
+
+function connect(code) {
+  if (!isValidRoom(code)) {
+    toast('房间号是 4 位数字', 'err');
+    return;
+  }
+  if (transport) transport.close();
+  transport = new DualTransport({ room: code, role: 'phone' });
+  transport.onMessage(onMessage);
+  transport.onStatus(paintStatus);
+  transport.start();
+  params.set('room', code);
+  history.replaceState(null, '', `${location.pathname}?${params}`);
+  log.ok(`开始连接房间 ${code}`);
+  toast(`正在连接房间 ${code}`);
+}
+
+function onMessage(msg, channel) {
+  if (msg.t === MSG.CTRL) {
+    if (Number.isFinite(msg.gain)) {
+      const input = $('#rng-gain');
+      input.value = String(msg.gain);
+      $('#v-gain').textContent = `${Number(msg.gain).toFixed(2)}×`;
+      log.info(`电脑端把灵敏度改成了 ${Number(msg.gain).toFixed(2)}×`);
+    }
+    return;
+  }
+  if (msg.t === MSG.PING) return;
+  if (msg.t === MSG.PONG) return;
+  if (channel === 'webrtc' || channel === 'mqtt') {
+    log.info(`收到电脑端消息：${msg.t}`);
+  }
+}
+
+function paintStatus(snap) {
+  const active = snap.peerActive;
+  setPill($('#pill-link'), active ? 'ok' : (snap.anyChannelOpen ? 'warn' : 'bad'),
+    active ? '已连上电脑' : (snap.anyChannelOpen ? '等待电脑应答' : '未连接'));
+  const roomPill = $('#pill-room');
+  if (Number.isFinite(snap.stats.rtt)) {
+    setPill(roomPill, 'ok', `房间 ${snap.room} · ${snap.stats.rtt.toFixed(0)}ms`);
+  } else {
+    setPill(roomPill, isValidRoom(snap.room) ? 'ok' : 'warn', `房间 ${snap.room}`);
+  }
+}
+
+if (isValidRoom($('#code').value)) {
+  connect($('#code').value);
+} else {
+  log.info('等待输入电脑端显示的 4 位房间号');
+}
+
+$('#btn-connect').addEventListener('click', () => connect(normalizeRoom($('#code').value)));
+$('#code').addEventListener('input', (e) => {
+  e.target.value = normalizeRoom(e.target.value);
+});
+$('#code').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') connect(normalizeRoom(e.target.value));
+});
+
+// ---- 陀螺仪 -------------------------------------------------------------
+
+const source = new OrientationSource();
+let gyroOn = false;
+let sending = true;
+let sentCount = 0;
+
+if (!supportsDeviceOrientation()) {
+  $('#btn-gyro').disabled = true;
+  $('#btn-gyro').textContent = '此设备没有陀螺仪';
+  $('#gyro-help').textContent = '这台设备/浏览器没有提供方向传感器。用下面的方向键或拖动画面来转视角即可。';
+  log.warn('没有检测到 deviceorientation，只能用触摸控制');
+} else if (!window.isSecureContext) {
+  $('#btn-gyro').disabled = true;
+  $('#btn-gyro').textContent = '需要 HTTPS 才能用陀螺仪';
+  log.err('当前不是 HTTPS，手机浏览器会拒绝提供陀螺仪数据');
+}
+
+$('#btn-gyro').addEventListener('click', async () => {
+  try {
+    await source.start();
+    gyroOn = true;
+    $('#btn-gyro').classList.add('hidden');
+    $('#gyro-help').textContent = '陀螺仪已开启。拿起手机转动、抬头、低头，电脑里的虚拟手机就会跟着动。';
+    log.ok('陀螺仪已开启');
+    toast('陀螺仪已开启');
+    navigator.vibrate?.(60);
+  } catch (err) {
+    log.err(`开启陀螺仪失败：${err.message}`);
+    toast(err.message, 'err');
+    if (needsPermissionGesture()) {
+      $('#gyro-help').textContent = '被拒绝了。请在 iOS 设置 → Safari → 动作与方向访问 里允许，再重新点一次这个按钮。';
+    }
+  }
+});
+
+// ---- 触摸偏移 -----------------------------------------------------------
+
+const OFFSET_LIMIT = 1.35;
+let offsetYaw = 0;
+let offsetPitch = 0;
+const offsetQuat = new THREE.Quaternion();
+const offsetEuler = new THREE.Euler();
+
+function rebuildOffset() {
+  offsetYaw = Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, offsetYaw));
+  offsetPitch = Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, offsetPitch));
+  offsetEuler.set(offsetPitch, offsetYaw, 0, 'YXZ');
+  offsetQuat.setFromEuler(offsetEuler);
+}
+
+function resetOffset() {
+  offsetYaw = 0;
+  offsetPitch = 0;
+  rebuildOffset();
+}
+
+const held = { up: false, down: false, left: false, right: false };
+const pad = $('#pad');
+
+pad.addEventListener('pointerdown', (e) => {
+  const zone = e.target.closest('.pad__zone');
+  if (!zone) return;
+  e.preventDefault();
+  const dir = zone.dataset.dir;
+  if (dir === 'center') {
+    resetOffset();
+    transport?.send(MSG.CTRL, { recenter: true });
+    toast('已回正并把当前朝向设为正前方');
+    return;
+  }
+  held[dir] = true;
+  zone.setPointerCapture?.(e.pointerId);
+});
+
+['pointerup', 'pointercancel', 'pointerleave'].forEach((type) => {
+  pad.addEventListener(type, (e) => {
+    const zone = e.target.closest?.('.pad__zone');
+    const dir = zone?.dataset.dir;
+    if (dir && dir in held) held[dir] = false;
+  });
+});
+window.addEventListener('blur', () => { held.up = held.down = held.left = held.right = false; });
+
+// 空白处拖动 = 在陀螺仪朝向之上叠加一个微调偏移
+let dragId = null;
+let dragX = 0;
+let dragY = 0;
+const DRAG_GAIN = 0.006;
+
+pad.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('.pad__zone')) return;
+  dragId = e.pointerId;
+  dragX = e.clientX;
+  dragY = e.clientY;
+  pad.setPointerCapture?.(dragId);
+});
+
+pad.addEventListener('pointermove', (e) => {
+  if (dragId === null || e.pointerId !== dragId) return;
+  const dx = e.clientX - dragX;
+  const dy = e.clientY - dragY;
+  dragX = e.clientX;
+  dragY = e.clientY;
+  offsetYaw -= dx * DRAG_GAIN;
+  offsetPitch -= dy * DRAG_GAIN;
+  rebuildOffset();
+});
+
+['pointerup', 'pointercancel'].forEach((type) => {
+  pad.addEventListener(type, (e) => {
+    if (e.pointerId === dragId) dragId = null;
+  });
+});
+
+// ---- 发送循环 -----------------------------------------------------------
+
+const outgoing = new THREE.Quaternion();
+let lastPose = performance.now();
+let lastFrame = performance.now();
+
+setInterval(() => {
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - lastFrame) / 1000);
+  lastFrame = now;
+
+  const speed = 1.9;
+  if (held.left) offsetYaw += speed * dt;
+  if (held.right) offsetYaw -= speed * dt;
+  if (held.up) offsetPitch += speed * dt;
+  if (held.down) offsetPitch -= speed * dt;
+  if (held.left || held.right || held.up || held.down) rebuildOffset();
+
+  if (!sending) return;
+  if (gyroOn && source.hasData) {
+    source.readInto(outgoing, offsetQuat);
+    lastPose = now;
+  } else if (offsetYaw !== 0 || offsetPitch !== 0) {
+    outgoing.copy(offsetQuat);
+    lastPose = now;
+  } else {
+    // 既没有陀螺仪也没有偏移时，仍然定期发一个空姿态，让电脑端知道手机还在。
+    if (now - lastPose < 900) return;
+    outgoing.identity();
+    lastPose = now;
+  }
+
+  transport?.send(MSG.ORIENT, { q: outgoing.toArray() });
+  sentCount++;
+}, 1000 / 60);
+
+// ---- 读数与姿态指示仪 ----------------------------------------------------
+
+const horizon = $('#horizon');
+
+function drawHorizon() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(1, horizon.clientWidth);
+  const h = Math.max(1, horizon.clientHeight);
+  if (horizon.width !== Math.round(w * dpr) || horizon.height !== Math.round(h * dpr)) {
+    horizon.width = Math.round(w * dpr);
+    horizon.height = Math.round(h * dpr);
+  }
+  const ctx = horizon.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  ctx.fillStyle = '#060a11';
+  ctx.fillRect(0, 0, w, h);
+
+  const pitch = gyroOn && source.hasData ? source.beta : 0;
+  const roll = gyroOn && source.hasData ? source.gamma : 0;
+  const heading = gyroOn && source.hasData ? source.alpha : 0;
+
+  const cx = w / 2;
+  const cy = h / 2 + 6;
+  const pitchScale = h / 90;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(-roll * Math.PI / 180);
+
+  const offsetY = pitch * pitchScale;
+  ctx.strokeStyle = '#38bdf8';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(-w * 0.46, offsetY);
+  ctx.lineTo(w * 0.46, offsetY);
+  ctx.stroke();
+
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(56,189,248,0.55)';
+  ctx.font = '9px ui-monospace, monospace';
+  ctx.fillStyle = 'rgba(148,163,184,0.85)';
+  ctx.textAlign = 'center';
+  for (let deg = -30; deg <= 30; deg += 10) {
+    if (deg === 0) continue;
+    const y = offsetY - deg * pitchScale;
+    const half = deg % 20 === 0 ? 22 : 12;
+    ctx.beginPath();
+    ctx.moveTo(-half, y);
+    ctx.lineTo(half, y);
+    ctx.stroke();
+    if (deg % 20 === 0) ctx.fillText(String(deg), -half - 12, y + 3);
+  }
+  ctx.restore();
+
+  // 固定在屏幕中央的准星
+  ctx.strokeStyle = '#fbbf24';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(w / 2, h / 2 + 6);
+  ctx.lineTo(w / 2 - 16, h / 2 + 6);
+  ctx.moveTo(w / 2, h / 2 + 6);
+  ctx.lineTo(w / 2 + 16, h / 2 + 6);
+  ctx.moveTo(w / 2, h / 2 + 6);
+  ctx.lineTo(w / 2, h / 2 + 2);
+  ctx.stroke();
+
+  // 顶部方位刻度带
+  ctx.save();
+  ctx.fillStyle = 'rgba(11,14,20,0.75)';
+  ctx.fillRect(0, 0, w, 16);
+  ctx.fillStyle = 'rgba(148,163,184,0.9)';
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const step = 30;
+  const shift = (heading % step) / step * 40;
+  for (let i = -3; i <= 3; i++) {
+    const value = Math.round((heading + i * step) / step) * step;
+    const x = w / 2 + i * 40 - shift;
+    const label = ((value % 360) + 360) % 360;
+    ctx.fillText(`${label}°`, x, 8);
+    ctx.fillStyle = 'rgba(148,163,184,0.35)';
+    ctx.fillRect(x - 0.5, 14, 1, 2);
+    ctx.fillStyle = 'rgba(148,163,184,0.9)';
+  }
+  ctx.restore();
+
+  // 偏移量指示：拖动或方向键带来的微调幅度
+  const deviation = Math.hypot(offsetYaw, offsetPitch);
+  if (deviation > 0.01) {
+    ctx.fillStyle = 'rgba(251,191,36,0.9)';
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`微调 ${(deviation * 180 / Math.PI).toFixed(0)}°`, 6, h - 6);
+  }
+}
+
+setInterval(() => {
+  $('#v-sent').textContent = String(sentCount);
+  const has = gyroOn && source.hasData;
+  $('#v-alpha').textContent = has ? `${source.alpha.toFixed(0)}°` : '—';
+  $('#v-beta').textContent = has ? `${source.beta.toFixed(0)}°` : '—';
+  $('#v-gamma').textContent = has ? `${source.gamma.toFixed(0)}°` : '—';
+  if (has) $('#gyro-help').textContent = source.absolute
+    ? '陀螺仪工作中（带磁力计，左右漂移会自动修正）。'
+    : '陀螺仪工作中。如果左右方向慢慢跑偏，点「把当前朝向设为正前方」重新对一次。';
+}, 150);
+
+(function tick() {
+  drawHorizon();
+  requestAnimationFrame(tick);
+})();
+
+// ---- 其他控件 -----------------------------------------------------------
+
+$('#rng-gain').addEventListener('input', (e) => {
+  const gain = Number(e.target.value);
+  $('#v-gain').textContent = `${gain.toFixed(2)}×`;
+  transport?.send(MSG.CTRL, { gain });
+});
+
+$('#btn-recal').addEventListener('click', () => {
+  resetOffset();
+  transport?.send(MSG.CTRL, { recenter: true });
+  log.info('已请求电脑端重新校准');
+  toast('已重新校准');
+});
+
+$('#btn-pause').addEventListener('click', (e) => {
+  sending = !sending;
+  e.target.textContent = sending ? '暂停发送' : '继续发送';
+  log.warn(sending ? '恢复发送姿态' : '已暂停发送，电脑端会切回待机动画');
+});
+
+window.addEventListener('beforeunload', () => {
+  source.stop();
+  transport?.close();
+});
+
+log.info('手机端已就绪');
+</script>
+</body>
+</html>

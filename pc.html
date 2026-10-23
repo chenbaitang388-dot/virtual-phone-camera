@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>电脑端 · 虚拟手机摄像头</title>
+<link rel="stylesheet" href="./assets/css/style.css" />
+<script src="./vendor/peerjs.min.js"></script>
+<script src="./vendor/mqtt.min.js"></script>
+<script src="./vendor/qrcode.min.js"></script>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+</head>
+<body>
+<div class="app app--pc">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-logo">◉</span>
+      <b>虚拟手机摄像头</b>
+      <span class="badge">电脑端</span>
+    </div>
+    <div class="spacer"></div>
+    <span class="pill" id="pill-webrtc"><span class="dot dot--warn"></span><span class="pill__text">点对点 待机</span></span>
+    <span class="pill" id="pill-mqtt"><span class="dot dot--warn"></span><span class="pill__text">中转 待机</span></span>
+    <span class="pill" id="pill-data"><span class="dot dot--bad"></span><span class="pill__text">等待手机</span></span>
+  </header>
+
+  <main class="main">
+    <section class="viewport" id="viewport">
+      <div id="stage" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
+        <canvas id="gl" class="viewport__canvas"></canvas>
+      </div>
+
+      <div class="overlay overlay--tl">
+        <div class="rec" id="rec-badge">
+          <span class="rec__dot"></span>
+          <span class="rec__time" id="rec-time">00:00</span>
+        </div>
+      </div>
+
+      <div class="overlay overlay--tr">
+        <div class="grid-stats">
+          <div class="stat"><span class="stat__k">主通道</span><span class="stat__v" id="s-chan">—</span></div>
+          <div class="stat"><span class="stat__k">往返延迟</span><span class="stat__v" id="s-rtt">—</span></div>
+          <div class="stat"><span class="stat__k">朝向包</span><span class="stat__v" id="s-pkts">0</span></div>
+          <div class="stat"><span class="stat__k">渲染帧率</span><span class="stat__v" id="s-fps">—</span></div>
+        </div>
+      </div>
+
+      <div class="overlay overlay--bl">
+        <span class="muted">拖动画面可旋转导播视角 · 滚轮缩放</span>
+      </div>
+
+      <div id="labels"></div>
+    </section>
+
+    <aside class="panel">
+      <div class="panel__title">控制台</div>
+      <div class="panel__body">
+
+        <div class="row">
+          <span class="badge">1 · 配对</span>
+          <button class="btn btn--ghost btn--sm" id="btn-new-room">换房间号</button>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="room-display">房间号（手机端要输同一个）</label>
+          <input class="input code-input" id="room-display" readonly />
+        </div>
+
+        <div class="row">
+          <div class="qr" id="qr" style="flex:0 0 auto;"></div>
+          <div class="stack" style="flex:1 1 0;min-width:0;">
+            <p class="muted" style="margin:0;">用手机自带相机扫左边二维码，会直接打开手机端页面。</p>
+            <button class="btn btn--ghost btn--sm btn--block" id="btn-copy-link">复制手机端链接</button>
+            <button class="btn btn--ghost btn--sm btn--block" id="btn-open-phone">在本机新标签打开手机端</button>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="row">
+          <span class="badge">2 · 录制</span>
+          <span class="muted mono" id="hint-mime">—</span>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="sel-layout">录制构图</label>
+          <select class="select" id="sel-layout">
+            <option value="split">左右分屏：左=虚拟手机视角，右=导播视角</option>
+            <option value="phone">只录虚拟手机第一人称视角</option>
+            <option value="operator">只录导播视角</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="sel-res">录制分辨率</label>
+          <select class="select" id="sel-res">
+            <option value="auto">跟随窗口</option>
+            <option value="1280x720">横屏 1280 × 720</option>
+            <option value="1920x1080">横屏 1920 × 1080</option>
+            <option value="720x1280">竖屏 720 × 1280</option>
+            <option value="1080x1920">竖屏 1080 × 1920</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <div class="field" style="flex:1 1 0;">
+            <label class="field__label" for="sel-fps">帧率</label>
+            <select class="select" id="sel-fps">
+              <option value="30">30 fps</option>
+              <option value="60">60 fps</option>
+            </select>
+          </div>
+          <div class="field" style="flex:1 1 0;">
+            <label class="field__label" for="sel-quality">画质</label>
+            <select class="select" id="sel-quality">
+              <option value="20000000">高（20 Mbps）</option>
+              <option value="12000000" selected>中（12 Mbps）</option>
+              <option value="6000000">低（6 Mbps）</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="stack">
+          <button class="btn btn--primary btn--block" id="btn-rec">开始录制</button>
+          <button class="btn btn--danger btn--block hidden" id="btn-stop">停止并保存</button>
+        </div>
+
+        <div class="panel hidden" id="result-panel" style="background:rgba(6,9,14,0.5);">
+          <div class="panel__title">上一段录制</div>
+          <div class="panel__body" style="gap:10px;">
+            <video id="result-video" controls playsinline style="width:100%;border-radius:8px;background:#000;"></video>
+            <div class="row">
+              <span class="muted mono" id="result-meta">—</span>
+              <button class="btn btn--ghost btn--sm" id="btn-again">再存一次</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="row"><span class="badge">3 · 手感</span></div>
+
+        <div class="field">
+          <label class="field__label" for="rng-gain">灵敏度 <span class="mono" id="val-gain">1.00×</span></label>
+          <input class="range" id="rng-gain" type="range" min="0.4" max="2.4" step="0.05" value="1" />
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="rng-smooth">平滑（越大越稳但越拖） <span class="mono" id="val-smooth">55 ms</span></label>
+          <input class="range" id="rng-smooth" type="range" min="0" max="220" step="5" value="55" />
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="rng-fov">虚拟手机镜头视场角 <span class="mono" id="val-fov">66°</span></label>
+          <input class="range" id="rng-fov" type="range" min="35" max="100" step="1" value="66" />
+        </div>
+
+        <button class="btn btn--ghost btn--block" id="btn-recal">重新校准（把当前朝向设为正前方）</button>
+
+        <div class="divider"></div>
+
+        <div class="row"><span class="badge">4 · 场景</span></div>
+
+        <div class="field">
+          <label class="field__label" for="sel-theme">全景主题</label>
+          <select class="select" id="sel-theme">
+            <option value="dusk" selected>黄昏</option>
+            <option value="day">白天</option>
+            <option value="night">夜晚</option>
+            <option value="space">深空</option>
+          </select>
+        </div>
+
+        <label class="switch">
+          <input type="checkbox" id="sw-phone" checked />
+          <span class="switch__track"></span>
+          <span>在导播视角里显示虚拟手机</span>
+        </label>
+
+        <label class="switch">
+          <input type="checkbox" id="sw-auto" checked />
+          <span class="switch__track"></span>
+          <span>导播视角自动环绕</span>
+        </label>
+
+        <div class="divider"></div>
+
+        <div class="row"><span class="badge">5 · 演示模式</span></div>
+        <div class="help">
+          手边没有手机、或者想先看看效果？开演示模式，电脑会用一条预设轨迹自动转动虚拟手机。
+          演示数据和真手机走的是完全一样的那条链路。
+        </div>
+        <button class="btn btn--ghost btn--block" id="btn-demo">开始演示</button>
+
+        <div class="divider"></div>
+
+        <div class="row">
+          <span class="badge">日志</span>
+          <button class="btn btn--ghost btn--sm" id="btn-fullscreen">全屏</button>
+        </div>
+        <div class="log" id="log"></div>
+
+      </div>
+    </aside>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import { VirtualPhoneStudio } from './src/scene.js';
+import { DualTransport } from './src/transport.js';
+import { OrientationSmoother } from './src/orientation.js';
+import { CanvasRecorder, recorderSupport } from './src/recorder.js';
+import { renderQr } from './src/qr.js';
+import { MSG, randomRoom, normalizeRoom, isValidRoom } from './src/protocol.js';
+import {
+  $, createLogger, createToast, setPill, copyText, downloadBlob,
+  fmtClock, fmtBytes, timestampName, toggleFullscreen,
+} from './src/ui.js';
+import * as THREE from 'three';
+
+const log = createLogger($('#log'));
+const toast = createToast($('#toast'));
+
+// ---- 房间号 -------------------------------------------------------------
+
+const params = new URLSearchParams(location.search);
+let room = normalizeRoom(params.get('room'));
+if (!isValidRoom(room)) {
+  room = randomRoom();
+  params.set('room', room);
+  history.replaceState(null, '', `${location.pathname}?${params}`);
+}
+
+function phoneUrl(r = room) {
+  const url = new URL('./phone.html', location.href);
+  url.searchParams.set('room', r);
+  url.search = url.searchParams.toString();
+  return url.toString();
+}
+
+function setupRoom(r) {
+  room = r;
+  $('#room-display').value = r;
+  renderQr($('#qr'), phoneUrl(r));
+}
+setupRoom(room);
+
+// ---- 3D 场景 ------------------------------------------------------------
+
+const studio = new VirtualPhoneStudio({ canvas: $('#gl'), container: $('#stage') });
+studio.setLayout($('#sel-layout').value);
+studio.setFov(Number($('#rng-fov').value));
+
+let panoramaTheme = $('#sel-theme').value;
+async function applyTheme(theme) {
+  await studio.setPanorama(theme);
+  log.ok(`全景已切换：${theme}`);
+}
+applyTheme(panoramaTheme).catch((err) => log.err(`全景加载失败：${err.message}`));
+
+// ---- 传输 / 朝向 ---------------------------------------------------------
+
+let transport = null;
+const smoother = new OrientationSmoother({ tau: 0.055 });
+const incoming = new THREE.Quaternion();
+let lastOrientationAt = -1e9;
+let demoRunning = false;
+let demoHandler = 0;
+
+const CHANNEL_LABEL = { webrtc: 'WebRTC', mqtt: 'MQTT', demo: '演示' };
+const STATE_LABEL = { idle: '待机', connecting: '连接中', open: '已连', failed: '不可用' };
+
+function pillState(state) {
+  if (state === 'open') return 'ok';
+  if (state === 'failed') return 'bad';
+  return 'warn';
+}
+
+function paintStatus(snap) {
+  setPill($('#pill-webrtc'), pillState(snap.webrtc.state), `点对点 ${STATE_LABEL[snap.webrtc.state] || snap.webrtc.state}`);
+  setPill($('#pill-mqtt'), pillState(snap.mqtt.state), `中转 ${STATE_LABEL[snap.mqtt.state] || snap.mqtt.state}`);
+}
+
+function onMessage(msg) {
+  if (msg.t === MSG.ORIENT && Array.isArray(msg.q) && msg.q.length === 4) {
+    incoming.fromArray(msg.q);
+    smoother.push(incoming, performance.now());
+    lastOrientationAt = performance.now();
+    if (msg.from === 'phone' && demoRunning) stopDemo('真手机已接入，演示模式自动关闭');
+    return;
+  }
+  if (msg.t === MSG.HELLO) {
+    log.ok(`手机端已接入房间 ${room}`);
+    toast('手机已连接，转动手机试试');
+  }
+}
+
+function startTransport(r) {
+  if (transport) transport.close();
+  transport = new DualTransport({ room: r, role: 'pc', log: () => {} });
+  transport.onMessage(onMessage);
+  transport.onStatus(paintStatus);
+  transport.start();
+  log.info(`开始监听房间 ${r}（WebRTC + MQTT 双通道）`);
+}
+
+startTransport(room);
+
+let fpsFrames = 0;
+let fpsAt = performance.now();
+
+studio.onFrame = (dt) => {
+  fpsFrames++;
+  const fresh = performance.now() - lastOrientationAt < 1200;
+  if (fresh) {
+    smoother.latency = (transport?.stats.rtt || 0) / 1000;
+    studio.setOrientation(smoother.update(dt));
+  } else {
+    studio.setIdle(true);
+  }
+};
+
+// ---- 演示模式 -----------------------------------------------------------
+
+const demoEuler = new THREE.Euler();
+const demoQuat = new THREE.Quaternion();
+
+function demoOrientation(t) {
+  demoEuler.set(
+    Math.sin(t * 0.21 + 1.1) * 0.40,
+    Math.sin(t * 0.33) * 1.65,
+    Math.sin(t * 0.13) * 0.20,
+    'YXZ',
+  );
+  return demoQuat.setFromEuler(demoEuler);
+}
+
+function startDemo() {
+  if (demoRunning) return;
+  demoRunning = true;
+  smoother.calibrated = false;
+  lastOrientationAt = -1e9;
+  const t0 = performance.now();
+  demoHandler = setInterval(() => {
+    const q = demoOrientation((performance.now() - t0) / 1000);
+    transport.inject(MSG.ORIENT, { q: q.toArray() });
+  }, 1000 / 60);
+  $('#btn-demo').textContent = '停止演示';
+  $('#btn-demo').classList.replace('btn--ghost', 'btn--danger');
+  log.ok('演示模式开启');
+}
+
+function stopDemo(reason) {
+  if (!demoRunning) return;
+  demoRunning = false;
+  clearInterval(demoHandler);
+  demoHandler = 0;
+  $('#btn-demo').textContent = '开始演示';
+  $('#btn-demo').classList.replace('btn--danger', 'btn--ghost');
+  if (reason) {
+    log.warn(reason);
+    toast(reason, 'err');
+  }
+}
+
+// ---- 录制 ---------------------------------------------------------------
+
+const support = recorderSupport();
+$('#hint-mime').textContent = support.ok ? support.mimeType.slice(0, 24) : '不支持录制';
+if (!support.ok) {
+  $('#btn-rec').disabled = true;
+  $('#btn-rec').textContent = '此浏览器不支持录制';
+  log.err('这个浏览器不支持 canvas.captureStream()，请换电脑上的 Chrome 或 Edge');
+}
+
+let resultUrl = '';
+
+const recorder = new CanvasRecorder($('#gl'), {
+  onStateChange: ({ state, error }) => {
+    const live = state === 'recording';
+    $('#rec-badge').classList.toggle('rec--live', live);
+    $('#btn-rec').classList.toggle('hidden', live);
+    $('#btn-stop').classList.toggle('hidden', !live);
+    if (state === 'error') {
+      log.err(`录制出错：${error?.message || error}`);
+      toast('录制出错，请看右侧日志', 'err');
+    }
+  },
+  onDone: ({ blob, duration, mimeType }) => {
+    const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+    const name = timestampName('虚拟手机录制', ext);
+    downloadBlob(blob, name);
+    if (resultUrl) URL.revokeObjectURL(resultUrl);
+    resultUrl = URL.createObjectURL(blob);
+    const video = $('#result-video');
+    video.src = resultUrl;
+    $('#result-meta').textContent = `${fmtClock(duration)} · ${fmtBytes(blob.size)} · .${ext}`;
+    $('#result-panel').classList.remove('hidden');
+    $('#result-panel').dataset.filename = name;
+    log.ok(`已保存 ${name}（${fmtClock(duration)}，${fmtBytes(blob.size)}）`);
+    toast('录制完成，视频已开始下载');
+  },
+});
+
+function startRecording() {
+  try {
+    recorder.start({
+      fps: Number($('#sel-fps').value),
+      bitsPerSecond: Number($('#sel-quality').value),
+    });
+    log.ok('开始录制虚拟手机画面');
+  } catch (err) {
+    log.err(err.message);
+    toast(err.message, 'err');
+  }
+}
+
+// ---- 控件 ---------------------------------------------------------------
+
+$('#sel-layout').addEventListener('change', (e) => {
+  studio.setLayout(e.target.value);
+  updateViewLabels();
+  if (e.target.value === 'split') toast('分屏模式下，录出来的视频会包含左右两半');
+});
+
+$('#sel-res').addEventListener('change', (e) => {
+  const value = e.target.value;
+  if (value === 'auto') {
+    studio.setRenderSize('auto');
+    return;
+  }
+  const [w, h] = value.split('x').map(Number);
+  studio.setRenderSize({ w, h });
+  log.info(`渲染分辨率固定为 ${w}×${h}，录制出来的视频就是这个尺寸`);
+});
+
+$('#rng-gain').addEventListener('input', (e) => {
+  const gain = Number(e.target.value);
+  smoother.gain = gain;
+  $('#val-gain').textContent = `${gain.toFixed(2)}×`;
+});
+
+$('#rng-smooth').addEventListener('input', (e) => {
+  const ms = Number(e.target.value);
+  smoother.tau = Math.max(0.001, ms / 1000);
+  $('#val-smooth').textContent = `${ms} ms`;
+});
+
+$('#rng-fov').addEventListener('input', (e) => {
+  const fov = Number(e.target.value);
+  studio.setFov(fov);
+  $('#val-fov').textContent = `${fov}°`;
+});
+
+$('#btn-recal').addEventListener('click', () => {
+  smoother.calibrate();
+  studio.snapOrientation();
+  log.info('已重新校准，当前朝向被设为正前方');
+  toast('已重新校准');
+});
+
+$('#sel-theme').addEventListener('change', (e) => {
+  panoramaTheme = e.target.value;
+  applyTheme(panoramaTheme).catch((err) => log.err(`全景加载失败：${err.message}`));
+});
+
+$('#sw-phone').addEventListener('change', (e) => studio.setShowPhone(e.target.checked));
+$('#sw-auto').addEventListener('change', (e) => studio.setAutoRotate(e.target.checked));
+
+$('#btn-rec').addEventListener('click', startRecording);
+$('#btn-stop').addEventListener('click', () => recorder.stop());
+$('#btn-demo').addEventListener('click', () => (demoRunning ? stopDemo('演示已停止') : startDemo()));
+$('#btn-fullscreen').addEventListener('click', () => toggleFullscreen(document.documentElement));
+
+$('#btn-copy-link').addEventListener('click', async () => {
+  const ok = await copyText(phoneUrl());
+  toast(ok ? '手机端链接已复制' : '复制失败，请手动抄写下面的房间号', ok ? 'ok' : 'err');
+});
+
+$('#btn-open-phone').addEventListener('click', () => window.open(phoneUrl(), '_blank'));
+
+$('#btn-new-room').addEventListener('click', () => {
+  const next = randomRoom();
+  params.set('room', next);
+  history.replaceState(null, '', `${location.pathname}?${params}`);
+  setupRoom(next);
+  startTransport(next);
+  smoother.calibrated = false;
+  lastOrientationAt = -1e9;
+  log.warn(`已换到新房间 ${next}，手机端需要重新扫码`);
+  toast(`新房间号 ${next}`);
+});
+
+$('#btn-again').addEventListener('click', () => {
+  const blob = recorder.lastBlob;
+  if (!blob) return;
+  downloadBlob(blob, $('#result-panel').dataset.filename || timestampName('虚拟手机录制', 'webm'));
+});
+
+// 空格键开始 / 停止录制
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' || e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+  e.preventDefault();
+  recorder.recording ? recorder.stop() : startRecording();
+});
+
+// ---- 视口标签与实时读数 --------------------------------------------------
+
+const labelLayer = $('#labels');
+
+// 只建一次 DOM，之后每次只改位置和文案，避免每 400ms 重建节点。
+function makeLabel() {
+  const el = document.createElement('div');
+  el.className = 'pip__label';
+  labelLayer.appendChild(el);
+  return el;
+}
+const phoneLabel = makeLabel();
+const operatorLabel = makeLabel();
+
+function updateViewLabels() {
+  const view = studio.getViewRects();
+  const { scale, size } = view;
+  const place = (el, rect, text) => {
+    if (!rect || !text) {
+      el.classList.add('hidden');
+      return;
+    }
+    el.classList.remove('hidden');
+    el.style.left = `${rect.x * scale + 12}px`;
+    el.style.bottom = `${(size.h - rect.y - rect.h) * scale + 12}px`;
+    el.textContent = text;
+  };
+  place(phoneLabel, view.phone, '虚拟手机视角（录这里）');
+  place(operatorLabel, view.operator, '导播视角');
+}
+
+setInterval(() => {
+  const now = performance.now();
+  const fps = (fpsFrames * 1000) / Math.max(1, now - fpsAt);
+  fpsFrames = 0;
+  fpsAt = now;
+
+  $('#s-fps').textContent = Number.isFinite(fps) ? fps.toFixed(0) : '—';
+  const stats = transport?.stats;
+  $('#s-chan').textContent = stats?.primaryChannel ? CHANNEL_LABEL[stats.primaryChannel] : '—';
+  $('#s-rtt').textContent = Number.isFinite(stats?.rtt) ? `${stats.rtt.toFixed(0)} ms` : '—';
+  $('#s-pkts').textContent = String(stats?.orientCount ?? 0);
+
+  const active = transport?.peerActive;
+  setPill($('#pill-data'), active ? 'ok' : 'bad', active ? '手机在线' : '等待手机');
+
+  if (recorder.recording) $('#rec-time').textContent = fmtClock(recorder.elapsed);
+  updateViewLabels();
+}, 400);
+
+updateViewLabels();
+
+// ---- 收尾 ---------------------------------------------------------------
+
+window.addEventListener('beforeunload', () => {
+  transport?.close();
+  clearInterval(demoHandler);
+  studio.dispose();
+});
+
+if (params.get('debug') === '1') {
+  window.__vf = { studio, transport, smoother, recorder, startDemo, stopDemo, room: () => room };
+  log.warn('已开启调试钩子 window.__vf');
+}
+
+log.ok('电脑端已就绪，把上面的房间号或二维码给手机端');
+</script>
+</body>
+</html>

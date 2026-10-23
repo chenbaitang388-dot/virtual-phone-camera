@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>虚拟手机摄像头 · 用真手机遥控 3D 场景里的手机拍视频</title>
+<meta name="description" content="电脑上跑一个 3D 全景场景，场景里有一台虚拟手机；用真手机的陀螺仪遥控这台虚拟手机的摄像头方向，并从它的第一人称视角录制视频。" />
+<link rel="stylesheet" href="./assets/css/style.css" />
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-logo">◉</span>
+      <b>虚拟手机摄像头</b>
+    </div>
+    <div class="spacer"></div>
+    <span class="badge">WebGL</span>
+    <span class="badge">WebRTC</span>
+    <span class="badge">无构建步骤</span>
+  </header>
+
+  <main class="main">
+    <section class="panel">
+      <div class="panel__title">它是怎么实现的</div>
+      <div class="panel__body">
+        <div class="help">
+          电脑上的页面会画出一个 360° 全景的 3D 场景，场景里浮着一台 3D 手机模型。
+          你在手机浏览器里打开同一个站点，手机把陀螺仪读到的姿态实时发到电脑，
+          电脑就用它来旋转场景里那台虚拟手机 ——
+          于是<b>真手机怎么转，虚拟手机的摄像头就怎么转</b>。
+          按下录制后，录的是虚拟手机摄像头第一人称看到的那块画面。
+        </div>
+        <div class="divider"></div>
+        <ol class="help">
+          <li>在<b>电脑</b>上打开电脑端页面，它会给出一个 4 位房间号和一个二维码。</li>
+          <li>用<b>手机相机</b>扫那个二维码（或手输房间号），手机端页面就打开了。</li>
+          <li>手机上点一下「启用陀螺仪」，然后拿着手机转动，电脑里的虚拟手机就会跟着转。</li>
+          <li>点电脑端的「开始录制」，录出来的是虚拟手机的第一人称视角。</li>
+        </ol>
+        <div class="help">
+          手机上不需要装任何 App，电脑上也不需要装 Blender 之类的软件，全部在浏览器里跑。
+          但注意：手机浏览器只在 <b>HTTPS</b> 页面里才允许读取陀螺仪，所以请用部署好的网址访问，不要用局域网 IP。
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__title">先选一个角色</div>
+      <div class="panel__body">
+        <div class="role-grid">
+          <a class="role-card" href="./pc.html">
+            <span class="role-card__icon">🖥</span>
+            <span class="role-card__title">我是电脑</span>
+            <span class="role-card__desc">显示 3D 场景和那台虚拟手机，出房间号和二维码，负责录制视频。</span>
+          </a>
+          <a class="role-card" href="./phone.html">
+            <span class="role-card__icon">📱</span>
+            <span class="role-card__title">我是手机</span>
+            <span class="role-card__desc">打开陀螺仪，用真手机的姿态遥控电脑里那台虚拟手机的摄像头。</span>
+          </a>
+        </div>
+        <p class="muted" id="hint">正在判断这是电脑还是手机…</p>
+        <div class="help">
+          两边都要开着这个页面，电脑端和手机端是同一个站点的两个页面，通过房间号配对。
+          手机端也可以只用手指在屏幕上拖动来转视角（不用陀螺仪也能玩）。
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__title">依赖与实现细节</div>
+      <div class="panel__body">
+        <div class="stack">
+          <div class="row">
+            <span class="badge">3D 渲染</span>
+            <span class="muted">three.js（已内嵌在 <span class="mono">vendor/</span>，不走外部 CDN）</span>
+          </div>
+          <div class="row">
+            <span class="badge">配对通道</span>
+            <span class="muted">WebRTC 点对点 + MQTT 中转，两条同时发，谁先到用谁</span>
+          </div>
+          <div class="row">
+            <span class="badge">录制</span>
+            <span class="muted">MediaRecorder 抓 canvas，导出 <span class="mono">.webm</span></span>
+          </div>
+        </div>
+        <div class="divider"></div>
+        <div class="help">
+          这个仓库是纯静态站，没有任何构建步骤 —— 推到 GitHub 之后由 GitHub Pages 直接发布，
+          顺带拿到 HTTPS（手机陀螺仪必需）。想了解完整架构和常见问题，看仓库根目录的
+          <span class="mono">README.md</span>。
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script type="module">
+  // 只做一件事：给用户一个"你大概该用哪个页面"的提示。
+  const hint = document.getElementById('hint');
+  const isPhone = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+  hint.textContent = isPhone
+    ? '看起来你正在用手机，点「我是手机」。'
+    : '看起来你正在用电脑，点「我是电脑」。';
+  if (!window.isSecureContext) {
+    const warn = document.createElement('div');
+    warn.className = 'help';
+    warn.innerHTML =
+      '当前页面不是 HTTPS（<span class="mono">' + location.protocol + '//</span>），' +
+      '手机浏览器会拒绝提供陀螺仪数据。做真实联调请用部署到 GitHub Pages 的网址。';
+    hint.insertAdjacentElement('afterend', warn);
+  }
+</script>
+</body>
+</html>
