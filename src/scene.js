@@ -534,19 +534,15 @@ export class VirtualPhoneStudio {
     }
   }
 
-  _loop() {
-    this._raf = requestAnimationFrame(this._loop);
-    const now = performance.now();
-    const dt = Math.min(0.05, Math.max(0.001, (now - this._lastAt) / 1000));
-    this._lastAt = now;
-    this._elapsed += dt;
-
+  // 推进并绘制一帧。抽成公开方法，这样渲染循环和外部（自动化测试）能用同一套逻辑，
+  // 不会出现"测试里能转、实际跑不起来"的偏差。
+  step(dt) {
     if (typeof this.onFrame === 'function') this.onFrame(dt, this._elapsed);
 
     if (this.idle) this._updateIdle(dt);
     else this._orientation.copy(this._target);
 
-    // 手机可能被隐藏，但相机要靠它算世界矩阵，所以这里显式更新一次。
+    // 手机模型可能被隐藏，但相机要靠它算世界矩阵，所以这里显式更新一次。
     this.phoneGroup.quaternion.copy(this._orientation);
     this.phoneGroup.updateMatrixWorld(true);
 
@@ -554,6 +550,15 @@ export class VirtualPhoneStudio {
     this._applySize();
     this._animateProps(dt);
     this._renderFrame();
+  }
+
+  _loop() {
+    this._raf = requestAnimationFrame(this._loop);
+    const now = performance.now();
+    const dt = Math.min(0.05, Math.max(0.001, (now - this._lastAt) / 1000));
+    this._lastAt = now;
+    this._elapsed += dt;
+    this.step(dt);
   }
 
   _renderFrame() {

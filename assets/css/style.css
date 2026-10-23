@@ -1200,15 +1200,27 @@ a:hover {
 
 /* ≥1000px：pc.html 两栏 —— 视口占满剩余，右侧固定 340px 面板 */
 @media (min-width: 1000px) {
+  /* 关键：必须把整页高度钉死在视口高度上。
+     否则右侧面板那一长串控件会把 body 撑到两三千像素高，
+     flex 的行高随之被撑开，左边 3D 视口就被拉成一条细长条。 */
+  .app--pc {
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
   .app--pc .main {
     flex-direction: row;
     align-items: stretch;
     gap: var(--gap);
+    min-height: 0;
+    overflow: hidden;
   }
 
   .app--pc .viewport {
     flex: 1 1 auto;
     min-width: 0;
+    min-height: 0;
   }
 
   .app--pc .panel {
