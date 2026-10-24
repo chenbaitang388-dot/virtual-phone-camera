@@ -21,7 +21,7 @@ function fixture() {
     previewCam: new THREE.PerspectiveCamera(), operatorCam: new THREE.PerspectiveCamera(),
     controls: { target: new THREE.Vector3(0, 1.55, 0), update() {} },
     walkSpeed: 2.8, runSpeed: 5.6, walkAccel: 12, walkBounds: 40,
-    minHeight: 0.25, maxHeight: 40, _walking: false,
+    _walking: false,
     _moveInput: { forward: 0, right: 0, up: 0, run: false },
     _velocity: new THREE.Vector3(), _lastPhonePos: new THREE.Vector3(0, 1.55, 0),
     _orientation: new THREE.Quaternion(), _target: new THREE.Quaternion(),
@@ -57,10 +57,13 @@ close(studio.phoneGroup.position.y, height);
 assert(studio.phoneGroup.position.z < -2, 'horizontal movement survives at raised height');
 studio.setMoveInput({ up: -1 });
 frames(studio, 20);
-close(studio.phoneGroup.position.y, 0.25);
+assert(studio.phoneGroup.position.y < -40, 'descent continues below ground without a lower limit');
 studio.setMoveInput({ up: 1, run: true });
 frames(studio, 20);
-close(studio.phoneGroup.position.y, 40);
+assert(studio.phoneGroup.position.y > 40, 'ascent continues beyond the former upper limit');
+const high = studio.phoneGroup.position.y;
+frames(studio, 20);
+assert(studio.phoneGroup.position.y > high + 100, 'holding ascent keeps increasing height');
 studio.setMoveInput();
 studio.resetPosition();
 close(studio.phoneGroup.position.y, 1.55);
@@ -80,7 +83,7 @@ close(tilted.phoneGroup.position.x, 0); close(tilted.phoneGroup.position.z, 0);
 const diagonal = fixture();
 diagonal.setMoveInput({ forward: 1, right: 1, up: 1 }); frames(diagonal);
 assert(diagonal._velocity.length() <= diagonal.walkSpeed + 1e-9);
-console.log('PASS: ascent/descent, limits, hover, WASD, Shift speed, world vertical axis, diagonal speed, reset, preview/recording cameras and operator follow');
+console.log('PASS: unlimited ascent/descent, hover, WASD, Shift speed, world vertical axis, diagonal speed, reset, preview/recording cameras and operator follow');
 
 // 执行页面实际的键盘事件代码，检查组合键、输入框和失焦释放。
 const page = await readFile(new URL('../pc.html', import.meta.url), 'utf8');

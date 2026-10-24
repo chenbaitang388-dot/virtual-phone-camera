@@ -82,8 +82,6 @@ export class VirtualPhoneStudio {
     this.runSpeed = 5.6;
     this.walkAccel = 12;
     this.walkBounds = 40;
-    this.minHeight = 0.25;
-    this.maxHeight = 40;
     this._walking = false;
     this._moveInput = { forward: 0, right: 0, up: 0, run: false };
     this._velocity = new THREE.Vector3();
@@ -732,11 +730,6 @@ export class VirtualPhoneStudio {
 
     const pos = this.phoneGroup.position;
     pos.addScaledVector(this._velocity, dt);
-    const height = THREE.MathUtils.clamp(pos.y, this.minHeight, this.maxHeight);
-    if (height !== pos.y) {
-      pos.y = height;
-      this._velocity.y = 0;
-    }
 
     const radius = Math.hypot(pos.x, pos.z);
     if (radius > this.walkBounds) {
