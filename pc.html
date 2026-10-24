@@ -49,7 +49,7 @@
       </div>
 
       <div class="overlay overlay--bl">
-        <span class="muted">拖动画面可旋转导播视角 · 滚轮缩放</span>
+        <span class="muted">拖动画面旋转导播 · 滚轮缩放 · <b>W A S D</b> 走动 · <b>Shift</b> 加速 · <b>C</b> 设正 · <b>V</b> 校平 · <b>R</b> 回原点</span>
       </div>
 
       <div id="labels"></div>
@@ -141,16 +141,38 @@
 
         <div class="divider"></div>
 
-        <div class="row"><span class="badge">3 · 手感</span></div>
+        <div class="row">
+          <span class="badge">3 · 姿态与设正</span>
+          <span class="muted mono" id="screen-mode">屏幕 —</span>
+        </div>
 
-        <div class="field">
-          <label class="field__label" for="rng-gain">灵敏度 <span class="mono" id="val-gain">1.00×</span></label>
-          <input class="range" id="rng-gain" type="range" min="0.4" max="2.4" step="0.05" value="1" />
+        <div class="grid-stats">
+          <div class="stat"><span class="stat__k">左右</span><span class="stat__v" id="s-yaw">0°</span></div>
+          <div class="stat"><span class="stat__k">俯仰</span><span class="stat__v" id="s-pitch">0°</span></div>
+          <div class="stat"><span class="stat__k">翻滚</span><span class="stat__v" id="s-roll">0°</span></div>
+          <div class="stat"><span class="stat__k">灵敏度</span><span class="stat__v">1:1</span></div>
+        </div>
+
+        <div class="row">
+          <button class="btn btn--primary btn--sm" id="btn-recal" style="flex:1 1 0;">设正（C）</button>
+          <button class="btn btn--ghost btn--sm" id="btn-level" style="flex:1 1 0;">校平（V）</button>
+        </div>
+
+        <label class="switch">
+          <input type="checkbox" id="sw-level" checked />
+          <span class="switch__track"></span>
+          <span>自动校平（地平线始终保持水平）</span>
+        </label>
+
+        <div class="help">
+          <b>设正</b>：把手机现在对准的方向记成“正前方”，三个读数全部归零。<br>
+          <b>校平</b>：只把地平线转正，看的方向和俯仰不变，画面不跳。<br>
+          灵敏度固定 <b>1:1</b> —— 手机转多少度，虚拟手机就转多少度，不做任何放大。
         </div>
 
         <div class="field">
-          <label class="field__label" for="rng-smooth">平滑（越大越稳但越拖） <span class="mono" id="val-smooth">55 ms</span></label>
-          <input class="range" id="rng-smooth" type="range" min="0" max="220" step="5" value="55" />
+          <label class="field__label" for="rng-smooth">平滑（只影响跟手速度，不改角度） <span class="mono" id="val-smooth">40 ms</span></label>
+          <input class="range" id="rng-smooth" type="range" min="0" max="220" step="5" value="40" />
         </div>
 
         <div class="field">
@@ -158,11 +180,29 @@
           <input class="range" id="rng-fov" type="range" min="35" max="100" step="1" value="66" />
         </div>
 
-        <button class="btn btn--ghost btn--block" id="btn-recal">重新校准（把当前朝向设为正前方）</button>
+        <div class="divider"></div>
+
+        <div class="row"><span class="badge">4 · 走动</span></div>
+
+        <div class="help keyhint">
+          <span class="keycap">W</span><span class="keycap">A</span><span class="keycap">S</span><span class="keycap">D</span>
+          <span>前后左右走</span>
+          <span class="keycap">Shift</span><span>加速</span>
+          <span class="keycap">R</span><span>回原点</span>
+        </div>
+        <div class="help">
+          虚拟手机就是一个“人”：往哪看就往哪走，抬头看天也能照常前进。
+          走位会直接出现在录制画面里。
+        </div>
+
+        <div class="row">
+          <span class="muted mono" id="walk-pos">位置 0.0, 0.0</span>
+          <button class="btn btn--ghost btn--sm" id="btn-reset-pos">回到原点</button>
+        </div>
 
         <div class="divider"></div>
 
-        <div class="row"><span class="badge">4 · 场景</span></div>
+        <div class="row"><span class="badge">5 · 场景</span></div>
 
         <div class="field">
           <label class="field__label" for="sel-theme">全景主题</label>
@@ -188,7 +228,7 @@
 
         <div class="divider"></div>
 
-        <div class="row"><span class="badge">5 · 导入自己的场景</span></div>
+        <div class="row"><span class="badge">6 · 导入自己的场景</span></div>
         <div class="help">
           也可以直接把文件<b>拖进左边的画面里</b>。
         </div>
@@ -222,7 +262,7 @@
 
         <div class="divider"></div>
 
-        <div class="row"><span class="badge">6 · 演示模式</span></div>
+        <div class="row"><span class="badge">7 · 演示模式</span></div>
         <div class="help">
           手边没有手机、或者想先看看效果？开演示模式，电脑会用一条预设轨迹自动转动虚拟手机。
           演示数据和真手机走的是完全一样的那条链路。
@@ -247,7 +287,7 @@
 <script type="module">
 import { VirtualPhoneStudio } from './src/scene.js';
 import { DualTransport } from './src/transport.js';
-import { OrientationSmoother } from './src/orientation.js';
+import { OrientationSmoother, screenOrientationLabel } from './src/orientation.js';
 import { CanvasRecorder, recorderSupport } from './src/recorder.js';
 import { renderQr } from './src/qr.js';
 import { MSG, randomRoom, normalizeRoom, isValidRoom, isFiniteQuaternion } from './src/protocol.js';
@@ -300,11 +340,23 @@ applyTheme(panoramaTheme).catch((err) => log.err(`全景加载失败：${err.mes
 // ---- 传输 / 朝向 ---------------------------------------------------------
 
 let transport = null;
-const smoother = new OrientationSmoother({ tau: 0.055 });
+const smoother = new OrientationSmoother({ tau: 0.04, rollLock: true });
 const incoming = new THREE.Quaternion();
+const posScratch = new THREE.Vector3();
 let lastOrientationAt = -1e9;
+let lastScreenAngle = null;
 let demoRunning = false;
 let demoHandler = 0;
+
+function controlQuaternion(value) {
+  return isFiniteQuaternion(value) ? new THREE.Quaternion().fromArray(value) : null;
+}
+
+// 校准后立刻把画面钉到结果上，不等下一帧平滑。
+function applyCalibration() {
+  studio.setOrientation(smoother.current);
+  studio.snapOrientation();
+}
 
 const CHANNEL_LABEL = { webrtc: 'WebRTC', mqtt: 'MQTT', demo: '演示' };
 const STATE_LABEL = { idle: '待机', connecting: '连接中', open: '已连', failed: '不可用' };
@@ -346,31 +398,39 @@ function onMessage(msg) {
       return;
     }
     incoming.fromArray(msg.q);
-    smoother.push(incoming, performance.now());
+    smoother.push(incoming);
     lastOrientationAt = performance.now();
+    if (Number.isFinite(msg.sa) && msg.sa !== lastScreenAngle) {
+      lastScreenAngle = msg.sa;
+      $('#screen-mode').textContent = `屏幕 ${screenOrientationLabel(msg.sa)}`;
+      log.info(`手机屏幕方向：${screenOrientationLabel(msg.sa)}`);
+    }
     if (msg.from === 'phone' && demoRunning) stopDemo('真手机已接入，演示模式自动关闭');
     return;
   }
   if (msg.t === MSG.CTRL) {
-    // 手机端只能调灵敏度、只能请求重新校准，真正的执行都在这里。
-    if (Number.isFinite(msg.gain)) {
-      const gain = Math.min(2.4, Math.max(0.4, msg.gain));
-      smoother.gain = gain;
-      $('#rng-gain').value = String(gain);
-      $('#val-gain').textContent = `${gain.toFixed(2)}×`;
-      log.info(`手机端把灵敏度改成 ${gain.toFixed(2)}×`);
-    }
+    // 手机端只请求校准，真正的执行都在电脑端；q 是手机按下按钮那一刻的准确姿态。
     if (msg.recenter === true) {
-      smoother.calibrate();
-      studio.snapOrientation();
-      log.info('手机端请求重新校准');
-      toast('手机端已重新校准');
+      smoother.calibrate(controlQuaternion(msg.q));
+      applyCalibration();
+      log.info('手机端请求设正');
+      toast('手机端已设正');
+    }
+    if (msg.level === true) {
+      smoother.level(controlQuaternion(msg.q));
+      applyCalibration();
+      log.info('手机端请求校平');
+      toast('手机端已校平');
     }
     return;
   }
   if (msg.t === MSG.HELLO) {
     log.ok(`手机端已接入房间 ${room}`);
     toast('手机已连接，转动手机试试');
+    // 新连接重新开始：等第一包姿态到了自动设正，并把当前的校平设置同步给手机
+    smoother.calibrated = false;
+    lastScreenAngle = null;
+    transport?.send(MSG.CTRL, { rollLock: smoother.rollLock });
   }
 }
 
@@ -391,12 +451,8 @@ let fpsAt = performance.now();
 studio.onFrame = (dt) => {
   fpsFrames++;
   const fresh = performance.now() - lastOrientationAt < 1200;
-  if (fresh) {
-    smoother.latency = (transport?.stats.rtt || 0) / 1000;
-    studio.setOrientation(smoother.update(dt));
-  } else {
-    studio.setIdle(true);
-  }
+  if (fresh) studio.setOrientation(smoother.update(dt));
+  else studio.setIdle(true);
 };
 
 // ---- 演示模式 -----------------------------------------------------------
@@ -513,16 +569,10 @@ $('#sel-res').addEventListener('change', (e) => {
   log.info(`渲染分辨率固定为 ${w}×${h}，录制出来的视频就是这个尺寸`);
 });
 
-$('#rng-gain').addEventListener('input', (e) => {
-  const gain = Number(e.target.value);
-  smoother.gain = gain;
-  $('#val-gain').textContent = `${gain.toFixed(2)}×`;
-});
-
 $('#rng-smooth').addEventListener('input', (e) => {
   const ms = Number(e.target.value);
-  smoother.tau = Math.max(0.001, ms / 1000);
-  $('#val-smooth').textContent = `${ms} ms`;
+  smoother.tau = ms === 0 ? 0 : ms / 1000;
+  $('#val-smooth').textContent = ms === 0 ? '关闭' : `${ms} ms`;
 });
 
 $('#rng-fov').addEventListener('input', (e) => {
@@ -531,11 +581,39 @@ $('#rng-fov').addEventListener('input', (e) => {
   $('#val-fov').textContent = `${fov}°`;
 });
 
-$('#btn-recal').addEventListener('click', () => {
+function doRecalibrate(from = '按钮') {
   smoother.calibrate();
-  studio.snapOrientation();
-  log.info('已重新校准，当前朝向被设为正前方');
-  toast('已重新校准');
+  applyCalibration();
+  // 手机端也有自己的读数，让它同步把零点挪到同一处
+  transport?.send(MSG.CTRL, { recenter: true });
+  log.info(`${from}设正：手机当前朝向 = 正前方，读数归零`);
+  toast('已设正，三个读数归零');
+}
+
+function doLevel(from = '按钮') {
+  smoother.level();
+  applyCalibration();
+  transport?.send(MSG.CTRL, { level: true });
+  log.info(`${from}校平：地平线转正，朝向和俯仰保持不变`);
+  toast('已校平，地平线水平');
+}
+
+$('#btn-recal').addEventListener('click', () => doRecalibrate());
+$('#btn-level').addEventListener('click', () => doLevel());
+
+$('#sw-level').addEventListener('change', (e) => {
+  smoother.rollLock = e.target.checked;
+  if (smoother.rollLock) smoother.level();
+  applyCalibration();
+  transport?.send(MSG.CTRL, { rollLock: smoother.rollLock });
+  log.info(smoother.rollLock
+    ? '自动校平已开启：地平线始终水平'
+    : '自动校平已关闭：手机怎么翻滚，虚拟手机就怎么翻滚');
+});
+
+$('#btn-reset-pos').addEventListener('click', () => {
+  studio.resetPosition();
+  log.info('虚拟手机已回到场景原点');
 });
 
 $('#sel-theme').addEventListener('change', (e) => {
@@ -657,6 +735,68 @@ window.addEventListener('keydown', (e) => {
   recorder.recording ? recorder.stop() : startRecording();
 });
 
+// ---- 键盘走动 -----------------------------------------------------------
+
+const heldKeys = new Set();
+
+function isTextTarget(el) {
+  if (!(el instanceof Element)) return false;
+  if (el.isContentEditable) return true;
+  if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return true;
+  if (el.tagName === 'INPUT') {
+    // 滑杆、开关、文件框不影响按 W；只有真正要打字的输入框才让路
+    return !['range', 'checkbox', 'radio', 'button', 'file', 'submit'].includes(el.type);
+  }
+  return false;
+}
+
+function syncMoveInput() {
+  studio.setMoveInput({
+    forward: (heldKeys.has('KeyW') ? 1 : 0) - (heldKeys.has('KeyS') ? 1 : 0),
+    right: (heldKeys.has('KeyD') ? 1 : 0) - (heldKeys.has('KeyA') ? 1 : 0),
+    run: heldKeys.has('ShiftLeft') || heldKeys.has('ShiftRight'),
+  });
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (isTextTarget(e.target)) return;
+
+  if (e.code === 'KeyW' || e.code === 'KeyA' || e.code === 'KeyS' || e.code === 'KeyD') {
+    heldKeys.add(e.code);
+    syncMoveInput();
+    e.preventDefault();
+    return;
+  }
+  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+    heldKeys.add(e.code);
+    syncMoveInput();
+    return;
+  }
+  if (e.repeat) return;
+  if (e.code === 'KeyR') {
+    studio.resetPosition();
+    toast('已回到原点');
+    return;
+  }
+  if (e.code === 'KeyC') {
+    doRecalibrate('键盘');
+    return;
+  }
+  if (e.code === 'KeyV') {
+    doLevel('键盘');
+  }
+});
+
+window.addEventListener('keyup', (e) => {
+  if (heldKeys.delete(e.code)) syncMoveInput();
+});
+
+window.addEventListener('blur', () => {
+  heldKeys.clear();
+  syncMoveInput();
+});
+
 // ---- 视口标签与实时读数 --------------------------------------------------
 
 const labelLayer = $('#labels');
@@ -704,6 +844,15 @@ setInterval(() => {
   setPill($('#pill-data'), active ? 'ok' : 'bad', active ? '手机在线' : '等待手机');
 
   if (recorder.recording) $('#rec-time').textContent = fmtClock(recorder.elapsed);
+
+  const angles = smoother.getAngles();
+  $('#s-yaw').textContent = `${angles.yaw.toFixed(0)}°`;
+  $('#s-pitch').textContent = `${angles.pitch.toFixed(0)}°`;
+  $('#s-roll').textContent = `${angles.roll.toFixed(0)}°`;
+
+  const pos = studio.getPosition(posScratch);
+  $('#walk-pos').textContent = `位置 ${pos.x.toFixed(1)}, ${pos.z.toFixed(1)}`;
+
   updateViewLabels();
 }, 400);
 
@@ -718,7 +867,10 @@ window.addEventListener('beforeunload', () => {
 });
 
 if (params.get('debug') === '1') {
-  window.__vf = { studio, transport, smoother, recorder, startDemo, stopDemo, room: () => room };
+  window.__vf = {
+    studio, transport, smoother, recorder, startDemo, stopDemo, THREE,
+    doRecalibrate, doLevel, room: () => room,
+  };
   log.warn('已开启调试钩子 window.__vf');
 }
 

@@ -1,12 +1,19 @@
-// 设备朝向 → 四元数，以及电脑端的平滑与外推。
-// 关键约定：手机页和电脑端用的是同一套设备坐标系（three.js 里 DeviceOrientationControls 的经典换算），
-// 因此手机上"把手机转过去对着某处"就等于虚拟手机摄像头转向同一方向。
+// 设备朝向 → 四元数，以及电脑端的平滑、设正与姿态矫正。
+//
+// 灵敏度固定 1:1：不对旋转角做任何放大/缩小，手机转多少度，虚拟手机就转多少度。
+// 平滑只影响"追上去"的速度，不影响最终角度 —— 停下来之后角度与真机完全一致。
+// 之前那套角速度外推会在运动途中超过真实角度，正是"不一致"的来源，已经删掉。
 import * as THREE from 'three';
 
 const ZEE = new THREE.Vector3(0, 0, 1);
 const EULER = new THREE.Euler();
 const Q0 = new THREE.Quaternion();
 const Q1 = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
+
+const _rel = new THREE.Quaternion();
+const _leveled = new THREE.Quaternion();
+const _inv = new THREE.Quaternion();
+const _angles = new THREE.Euler();
 
 export function deviceOrientationToQuaternion(out, alpha, beta, gamma, screenAngle) {
   const a = THREE.MathUtils.degToRad(Number.isFinite(alpha) ? alpha : 0);
@@ -17,6 +24,8 @@ export function deviceOrientationToQuaternion(out, alpha, beta, gamma, screenAng
   EULER.set(b, a, -g, 'YXZ');
   out.setFromEuler(EULER);
   out.multiply(Q1);
+  // 这一步是"按屏幕方向修正"：手机横过来时，画面不会跟着翻滚 90°，
+  // 而是像相机 App 一样保持地平线水平。竖屏/横屏的差别全靠它。
   out.multiply(Q0.setFromAxisAngle(ZEE, -o));
   return out;
 }
@@ -30,7 +39,37 @@ export function needsPermissionGesture() {
     typeof window.DeviceOrientationEvent.requestPermission === 'function';
 }
 
-// 手机端：把 deviceorientation 事件聚合成一个"当前朝四元数"。
+export function screenOrientationLabel(angle) {
+  const a = ((Math.round(Number(angle) || 0) % 360) + 360) % 360;
+  if (a === 0) return '竖屏';
+  if (a === 90) return '横屏 90°';
+  if (a === 180) return '倒竖屏 180°';
+  if (a === 270) return '横屏 270°';
+  return `屏幕 ${a}°`;
+}
+
+// 四元数 → 直观的三轴角度（度）。yaw=左右，pitch=俯仰，roll=翻滚。
+export function quaternionToAngles(q, out = {}) {
+  _angles.setFromQuaternion(q, 'YXZ');
+  out.yaw = THREE.MathUtils.radToDeg(_angles.y);
+  out.pitch = THREE.MathUtils.radToDeg(_angles.x);
+  out.roll = THREE.MathUtils.radToDeg(_angles.z);
+  return out;
+}
+
+// 去掉翻滚、保留朝向和俯仰：地平线转正，但看的方向不变。
+export function withoutRoll(q, out = new THREE.Quaternion()) {
+  _angles.setFromQuaternion(q, 'YXZ');
+  _angles.z = 0;
+  return out.setFromEuler(_angles);
+}
+
+function shortest(q) {
+  if (q.w < 0) q.set(-q.x, -q.y, -q.z, -q.w);
+  return q;
+}
+
+// 手机端：把 deviceorientation 聚合成一个"当前朝向四元数"。
 export class OrientationSource {
   constructor() {
     this.quaternion = new THREE.Quaternion();
@@ -93,8 +132,6 @@ export class OrientationSource {
   }
 
   // 取一个"当下"的四元数：设备朝向换算之后，再叠加触摸微调产生的局部偏移。
-  // 灵敏度不在这里做 —— 放大旋转必须相对"校准零点"来算，那个零点在电脑端，
-  // 所以灵敏度由电脑端的 OrientationSmoother.gain 负责。
   readInto(out, offset = null) {
     deviceOrientationToQuaternion(out, this.alpha, this.beta, this.gamma, this.screenAngle());
     if (offset) out.multiply(offset);
@@ -102,36 +139,25 @@ export class OrientationSource {
   }
 }
 
-// 电脑端：把收到的朝向做 slerp 平滑，并在延迟明显时做一点角速度外推。
+// 电脑端：平滑 + 设正 + 校平。灵敏度不在这里做任何缩放。
 export class OrientationSmoother {
-  constructor({ tau = 0.055, leadCap = 0.09, gain = 1 } = {}) {
+  constructor({ tau = 0.04, rollLock = true } = {}) {
     this.tau = tau;
-    this.leadCap = leadCap;
-    // gain 是灵敏度：>1 表示手机转一点、虚拟摄像头转更多。
-    this.gain = gain;
+    // 自动校平：每帧把翻滚清零，地平线永远水平。
+    // 关掉之后手机怎么翻，虚拟手机就怎么翻（完整 3DoF）。
+    this.rollLock = rollLock;
     this.target = new THREE.Quaternion();
     this.current = new THREE.Quaternion();
-    this.predicted = new THREE.Quaternion();
+    this.relative = new THREE.Quaternion();
     this._calib = new THREE.Quaternion();
     this._calibInverse = new THREE.Quaternion();
-    this._prev = new THREE.Quaternion();
-    // 上一帧"测量"到的相对量（未外推）。角速度必须由它算，不能用已外推的 target，
-    // 否则外推量会被当成运动、下一帧差分反向，导致速率虚假放大与来回抖动。
-    this._prevRelative = new THREE.Quaternion();
     this._lastSource = new THREE.Quaternion();
     this._hasSource = false;
-    this._hasPrev = false;
-    this._prevAt = 0;
-    this._scratch = new THREE.Quaternion();
-    this._extra = new THREE.Quaternion();
-    this._axis = new THREE.Vector3();
-    this.latency = 0;
     this.calibrated = false;
-    this.angularRate = 0;
+    this.received = 0;
   }
 
-  // 校准：把"按下校准那一刻的朝向"记成虚拟摄像头的零点，
-  // 之后所有旋转都是相对这个零点的增量，用户不用管手机初始朝向。
+  // 设正：把"按下这一刻的朝向"记成正前方，读数和画面全部归零。
   calibrate(sourceQuaternion = null) {
     const source = sourceQuaternion || (this._hasSource ? this._lastSource : this.target);
     this._calib.copy(source);
@@ -139,74 +165,98 @@ export class OrientationSmoother {
     this.calibrated = true;
     this.target.identity();
     this.current.identity();
-    this._prevRelative.identity();
-    this._hasPrev = false;
+    this.relative.identity();
+    return this;
   }
 
-  push(sourceQuaternion, nowMs = performance.now()) {
+  // 校平：只把翻滚转正（地平线水平），朝向和俯仰保持不变，画面不跳。
+  level(sourceQuaternion = null) {
+    const source = sourceQuaternion || (this._hasSource ? this._lastSource : null);
+    if (!this.calibrated || !source) return this.calibrate(source || this.target);
+
+    _rel.copy(this._calibInverse).multiply(source);
+    shortest(_rel);
+    withoutRoll(_rel, _leveled);
+
+    // 新的校准零点 C' 满足 C'⁻¹·S = 校平后的相对量：C' = S·L⁻¹
+    _inv.copy(_leveled).invert();
+    this._calib.copy(source).multiply(_inv);
+    this._calibInverse.copy(this._calib).invert();
+
+    this.relative.copy(_leveled);
+    this.target.copy(_leveled);
+    this.current.copy(_leveled);
+    return this;
+  }
+
+  push(sourceQuaternion) {
     this._lastSource.copy(sourceQuaternion);
     this._hasSource = true;
+    this.received++;
     if (!this.calibrated) this.calibrate(sourceQuaternion);
 
-    const relative = this._scratch.copy(this._calibInverse).multiply(sourceQuaternion);
-    if (relative.w < 0) {
-      // 统一成最短路径表示，后面的角度和轴才是对的。
-      relative.set(-relative.x, -relative.y, -relative.z, -relative.w);
-    }
+    _rel.copy(this._calibInverse).multiply(sourceQuaternion);
+    shortest(_rel);
+    if (this.rollLock) withoutRoll(_rel, _rel);
 
-    if (this.gain !== 1) {
-      const half = Math.acos(Math.min(1, relative.w));
-      const sin = Math.sin(half);
-      if (sin > 1e-5) {
-        this._axis.set(relative.x, relative.y, relative.z).divideScalar(sin);
-        relative.setFromAxisAngle(this._axis, Math.min(2 * half * this.gain, Math.PI * 0.995));
-      }
-    }
-
-    if (this._hasPrev) {
-      const dt = Math.max(1e-3, (nowMs - this._prevAt) / 1000);
-      // 差分参考上一帧"测量"相对量，而不是已外推的 target：
-      // 否则外推量会被算进 delta，速率被放大、轴甚至反向，预测来回抖。
-      const delta = this._prevRelative.clone().invert().multiply(relative);
-      // relative 的 "w 取正" 会在旋转跨过 180° 时把四元数整体变号，
-      // 于是这里的 delta 可能被带上一个多余负号，令轴反向、外推抖动。
-      // 先把 delta 归一到 w>=0（最短路径），再取轴与半角，两者才自洽。
-      if (delta.w < 0) delta.set(-delta.x, -delta.y, -delta.z, -delta.w);
-      const halfAngle = Math.acos(Math.min(1, delta.w));
-      const sin = Math.sin(halfAngle);
-      if (sin > 1e-5) {
-        this._axis.set(delta.x, delta.y, delta.z).divideScalar(sin);
-        // 把局部角速度轴搬到世界系，再绕它外推，这样不管手机什么姿态都成立。
-        this._axis.applyQuaternion(relative);
-        const rate = (2 * halfAngle) / dt;
-        this.angularRate = rate;
-        if (this.latency > 0.04) {
-          const extra = Math.min(rate * Math.min(this.latency * 0.5, this.leadCap), 0.35);
-          this._extra.setFromAxisAngle(this._axis, extra);
-          this.predicted.copy(this._extra).multiply(relative);
-        } else {
-          this.predicted.copy(relative);
-        }
-      } else {
-        this.predicted.copy(relative);
-      }
-    } else {
-      this.predicted.copy(relative);
-    }
-
-    this._prev.copy(this.target);
-    this._prevRelative.copy(relative);
-    this._prevAt = nowMs;
-    this._hasPrev = true;
-    this.target.copy(this.predicted);
+    this.relative.copy(_rel);
+    this.target.copy(_rel);
+    return this.target;
   }
 
-  // 每帧调用：朝目标收敛。tau 越小越跟手，越大越平滑但更"拖"。
+  // 每帧调用：朝目标收敛。tau 越小越跟手，0 就是完全不过滤。
   update(dt) {
     if (!this.calibrated) return this.current;
-    const tau = Math.max(0.001, this.tau);
-    const alpha = 1 - Math.exp(-Math.max(dt, 0) / tau);
+    if (this.tau <= 0.001) {
+      this.current.copy(this.target);
+      return this.current;
+    }
+    const alpha = 1 - Math.exp(-Math.max(dt, 0) / this.tau);
     this.current.slerp(this.target, Math.min(1, alpha));
+    // slerp 只会无限逼近；把残差按浮点精度直接抹平，保证静止时角度严格 1:1。
+    if (Math.abs(this.current.dot(this.target)) > 0.99999999) this.current.copy(this.target);
     return this.current;
+  }
+
+  getAngles(out = {}) {
+    return quaternionToAngles(this.current, out);
+  }
+}
+
+// 手机端只用来显示相对角度，不参与控制（真正的校准在电脑端）。
+export class RelativeOrientation {
+  constructor() {
+    this._inverse = new THREE.Quaternion();
+    this.calibrated = false;
+    this.angles = { yaw: 0, pitch: 0, roll: 0 };
+  }
+
+  reset() {
+    this.calibrated = false;
+    this.angles.yaw = this.angles.pitch = this.angles.roll = 0;
+  }
+
+  calibrate(q) {
+    this._inverse.copy(q).invert();
+    this.calibrated = true;
+    this.angles.yaw = this.angles.pitch = this.angles.roll = 0;
+  }
+
+  level(q) {
+    if (!this.calibrated) return this.calibrate(q);
+    _rel.copy(this._inverse).multiply(q);
+    shortest(_rel);
+    withoutRoll(_rel, _leveled);
+    _inv.copy(q).invert();
+    this._inverse.copy(_leveled).multiply(_inv);
+  }
+
+  readAngles(q, rollLock = false, out = this.angles) {
+    if (!this.calibrated) this.calibrate(q);
+    _rel.copy(this._inverse).multiply(q);
+    shortest(_rel);
+    quaternionToAngles(_rel, out);
+    if (rollLock) out.roll = 0;
+    return out;
   }
 }

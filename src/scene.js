@@ -14,6 +14,12 @@ const PREVIEW_SIZE = { w: 512, h: 1024 };
 
 const _idleEuler = new THREE.Euler();
 const _idleQuat = new THREE.Quaternion();
+const _walkEuler = new THREE.Euler();
+const _forward = new THREE.Vector3();
+const _right = new THREE.Vector3();
+const _wish = new THREE.Vector3();
+const _delta = new THREE.Vector3();
+const UP = new THREE.Vector3(0, 1, 0);
 
 function mulberry32(seed) {
   let s = seed;
@@ -70,6 +76,17 @@ export class VirtualPhoneStudio {
     this.showPhone = true;
     this._target = new THREE.Quaternion();
     this._orientation = new THREE.Quaternion();
+
+    // 第一人称步行：虚拟手机就是"人"，相机的高度固定在站立视高。
+    this.walkSpeed = 2.8;
+    this.runSpeed = 5.6;
+    this.walkAccel = 12;
+    this.walkBounds = 40;
+    this._walking = false;
+    this._moveInput = { forward: 0, right: 0, run: false };
+    this._velocity = new THREE.Vector3();
+    this._lastPhonePos = new THREE.Vector3().copy(PHONE_PIVOT);
+    this._obstacles = [];
     this._elapsed = 0;
     this._lastAt = performance.now();
     this._raf = 0;
@@ -182,6 +199,41 @@ export class VirtualPhoneStudio {
     this._target.copy(quaternion);
   }
 
+  // ---- 第一人称走动 -----------------------------------------------------
+
+  // forward = W/S（+1 前进），right = D/A（+1 右移），run = Shift
+  setMoveInput(input = {}) {
+    const forward = THREE.MathUtils.clamp(Number(input.forward) || 0, -1, 1);
+    const right = THREE.MathUtils.clamp(Number(input.right) || 0, -1, 1);
+    this._moveInput.forward = forward;
+    this._moveInput.right = right;
+    this._moveInput.run = !!input.run;
+
+    // 待机动画会自己转，一按走动就把当下的姿态钉住，避免画面先跳一下。
+    if ((forward || right) && this.idle) {
+      this._target.copy(this._orientation);
+      this.idle = false;
+    }
+  }
+
+  get walking() {
+    return this._walking;
+  }
+
+  getPosition(out = new THREE.Vector3()) {
+    return out.copy(this.phoneGroup.position);
+  }
+
+  resetPosition() {
+    _delta.copy(PHONE_PIVOT).sub(this.phoneGroup.position);
+    this.phoneGroup.position.copy(PHONE_PIVOT);
+    this._velocity.set(0, 0, 0);
+    this.operatorCam.position.add(_delta);
+    this.controls.target.add(_delta);
+    this._lastPhonePos.copy(PHONE_PIVOT);
+    return this;
+  }
+
   // 给页面用：拿到当前各视角所占的像素矩形，用来把 DOM 标签对齐到画面对应位置。
   getViewRects() {
     return {
@@ -194,7 +246,8 @@ export class VirtualPhoneStudio {
   }
 
   setIdle(enabled) {
-    this.idle = !!enabled;
+    // 走路时不能被待机动画抢走朝向
+    this.idle = !!enabled && !this._walking;
   }
 
   snapOrientation() {
@@ -426,6 +479,12 @@ export class VirtualPhoneStudio {
       pillar.scale.set(width, height, width);
       this.scene.add(pillar);
       this.props.push(pillar);
+      // 半对角线 + 人的半径，走路时不会穿柱子
+      this._obstacles.push({
+        x: pillar.position.x,
+        z: pillar.position.z,
+        r: width * Math.SQRT1_2 + 0.32,
+      });
     }
 
     // 悬空的圆环，缓慢自转，让静止画面也有动感
@@ -637,6 +696,69 @@ export class VirtualPhoneStudio {
     }
   }
 
+  // 走路的"前"永远是当前看的方向投影到地面；抬头看天也照样能往前走。
+  _updateWalk(dt) {
+    const input = this._moveInput;
+    const wants = input.forward !== 0 || input.right !== 0;
+
+    _wish.set(0, 0, 0);
+    if (wants) {
+      _forward.set(0, 0, -1).applyQuaternion(this._orientation);
+      _forward.y = 0;
+      if (_forward.lengthSq() > 0.0025) {
+        _forward.normalize();
+      } else {
+        // 接近垂直俯仰时地面投影会退化成零向量，用偏航角兜底
+        _walkEuler.setFromQuaternion(this._orientation, 'YXZ');
+        _forward.set(-Math.sin(_walkEuler.y), 0, -Math.cos(_walkEuler.y));
+      }
+      _right.crossVectors(_forward, UP).normalize();
+      _wish.addScaledVector(_forward, input.forward).addScaledVector(_right, input.right);
+      if (_wish.lengthSq() > 1) _wish.normalize();
+      _wish.multiplyScalar(input.run ? this.runSpeed : this.walkSpeed);
+    }
+
+    const k = 1 - Math.exp(-dt * this.walkAccel);
+    this._velocity.lerp(_wish, k);
+    if (this._velocity.lengthSq() < 1e-8) this._velocity.set(0, 0, 0);
+    this._walking = wants || this._velocity.lengthSq() > 1e-4;
+    if (!this._walking) return;
+
+    const pos = this.phoneGroup.position;
+    pos.addScaledVector(this._velocity, dt);
+    pos.y = PHONE_PIVOT.y;
+
+    const radius = Math.hypot(pos.x, pos.z);
+    if (radius > this.walkBounds) {
+      const nx = pos.x / radius;
+      const nz = pos.z / radius;
+      pos.x = nx * this.walkBounds;
+      pos.z = nz * this.walkBounds;
+      const outward = this._velocity.x * nx + this._velocity.z * nz;
+      if (outward > 0) {
+        this._velocity.x -= outward * nx;
+        this._velocity.z -= outward * nz;
+      }
+    }
+
+    for (const o of this._obstacles) {
+      const dx = pos.x - o.x;
+      const dz = pos.z - o.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= o.r * o.r) continue;
+      const d = Math.sqrt(d2) || 1e-4;
+      const nx = dx / d;
+      const nz = dz / d;
+      pos.x = o.x + nx * o.r;
+      pos.z = o.z + nz * o.r;
+      const inward = this._velocity.x * nx + this._velocity.z * nz;
+      if (inward < 0) {
+        this._velocity.x -= inward * nx;
+        this._velocity.z -= inward * nz;
+      }
+    }
+  }
+
   _updateIdle(dt) {
     const t = this._elapsed;
     _idleEuler.set(
@@ -673,6 +795,17 @@ export class VirtualPhoneStudio {
 
     // 手机模型可能被隐藏，但相机要靠它算世界矩阵，所以这里显式更新一次。
     this.phoneGroup.quaternion.copy(this._orientation);
+    this._updateWalk(dt);
+
+    // 导播视角跟着手机走，否则走远之后操作员就找不到它了。
+    // 相机和轨道中心同时平移，环绕关系保持不变。
+    _delta.copy(this.phoneGroup.position).sub(this._lastPhonePos);
+    if (_delta.lengthSq() > 1e-12) {
+      this.operatorCam.position.add(_delta);
+      this.controls.target.add(_delta);
+      this._lastPhonePos.copy(this.phoneGroup.position);
+    }
+
     this.phoneGroup.updateMatrixWorld(true);
 
     this.controls.update();

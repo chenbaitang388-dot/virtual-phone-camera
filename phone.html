@@ -34,41 +34,43 @@
                  autocorrect="off" spellcheck="false" maxlength="6" placeholder="k7m2qp" />
         </div>
         <button class="btn btn--primary btn--block" id="btn-connect">连接电脑</button>
-        <div class="help" id="setup-help">
-          电脑端页面上会显示一个 6 位房间码和一个二维码。
-          最省事的做法是用手机相机直接扫那个二维码，会自动把房间码填好并打开这个页面，
-          不用手输。
-        </div>
       </div>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="gyro-panel">
       <div class="panel__title">2 · 陀螺仪</div>
       <div class="panel__body">
         <button class="btn btn--primary btn--block" id="btn-gyro">启用陀螺仪</button>
-        <div class="help" id="gyro-help">
-          iPhone 上必须点一下这个按钮，而且页面必须是
-          <b>HTTPS</b>（部署到 GitHub Pages 的网址就是 HTTPS）。
-          没有陀螺仪也能玩，用下面的方向键或直接拖动画面。
+
+        <div class="row">
+          <button class="btn btn--ghost btn--sm" id="btn-recal" style="flex:1 1 0;">设正</button>
+          <button class="btn btn--ghost btn--sm" id="btn-level" style="flex:1 1 0;">校平</button>
         </div>
 
         <div class="grid-stats">
-          <div class="stat"><span class="stat__k">左右 α</span><span class="stat__v" id="v-alpha">—</span></div>
-          <div class="stat"><span class="stat__k">俯仰 β</span><span class="stat__v" id="v-beta">—</span></div>
-          <div class="stat"><span class="stat__k">翻滚 γ</span><span class="stat__v" id="v-gamma">—</span></div>
+          <div class="stat"><span class="stat__k">左右</span><span class="stat__v" id="v-yaw">0°</span></div>
+          <div class="stat"><span class="stat__k">俯仰</span><span class="stat__v" id="v-pitch">0°</span></div>
+          <div class="stat"><span class="stat__k">翻滚</span><span class="stat__v" id="v-roll">0°</span></div>
           <div class="stat"><span class="stat__k">已发送</span><span class="stat__v" id="v-sent">0</span></div>
         </div>
 
         <canvas id="horizon" aria-label="姿态指示仪"></canvas>
 
-        <div class="field">
-          <label class="field__label" for="rng-gain">灵敏度 <span class="mono" id="v-gain">1.00×</span></label>
-          <input class="range" id="rng-gain" type="range" min="0.4" max="2.4" step="0.05" value="1" />
+        <div class="row">
+          <span class="muted mono" id="v-screen">屏幕：竖屏</span>
+          <span class="muted mono" id="v-level">自动校平：开</span>
         </div>
 
-        <div class="row">
-          <button class="btn btn--ghost btn--sm" id="btn-recal">把当前朝向设为正前方</button>
-          <button class="btn btn--ghost btn--sm" id="btn-pause">暂停发送</button>
+        <button class="btn btn--ghost btn--block btn--sm" id="btn-pause">暂停发送</button>
+
+        <div class="help" id="gyro-help">
+          iPhone 必须点上面的按钮授权，页面必须是 <b>HTTPS</b>。
+          没有陀螺仪也能用方向键或拖动画面。
+        </div>
+
+        <div class="help">
+          灵敏度固定 <b>1:1</b>：手机转多少度，电脑里的虚拟手机就转多少度，
+          不做放大也不做缩小。读数以「设正」那一刻为零点。
         </div>
       </div>
     </section>
@@ -76,7 +78,7 @@
     <section class="pad" id="pad">
       <div class="pad__zone pad__zone--up" data-dir="up">↑ 抬头</div>
       <div class="pad__zone pad__zone--left" data-dir="left">← 左看</div>
-      <div class="pad__zone pad__zone--center" data-dir="center">回正</div>
+      <div class="pad__zone pad__zone--center" data-dir="center">设正</div>
       <div class="pad__zone pad__zone--right" data-dir="right">右看 →</div>
       <div class="pad__zone pad__zone--down" data-dir="down">↓ 低头</div>
       <span class="pad__hint" style="grid-column:1/-1;grid-row:4;">在空白处拖动也能转视角 · 方向键可按住连续微调</span>
@@ -97,11 +99,19 @@
 import * as THREE from 'three';
 import { DualTransport } from './src/transport.js';
 import { MSG, normalizeRoom, isValidRoom } from './src/protocol.js';
-import { OrientationSource, needsPermissionGesture, supportsDeviceOrientation } from './src/orientation.js';
+import {
+  OrientationSource, RelativeOrientation, needsPermissionGesture,
+  supportsDeviceOrientation, screenOrientationLabel,
+} from './src/orientation.js';
 import { $, createLogger, createToast, setPill } from './src/ui.js';
 
 const log = createLogger($('#log'));
 const toast = createToast($('#toast'));
+
+// 手机端只负责显示相对角度，真正的校准在电脑端执行。
+const relative = new RelativeOrientation();
+const poseScratch = new THREE.Quaternion();
+let rollLock = true;
 
 // ---- 配对 ---------------------------------------------------------------
 
@@ -118,6 +128,8 @@ function connect(code) {
     return;
   }
   if (transport) transport.close();
+  // 新连接重新对零点：下一次采样会成为手机端读数的基准
+  relative.reset();
   transport = new DualTransport({ room: code, role: 'phone' });
   transport.onMessage(onMessage);
   transport.onStatus(paintStatus);
@@ -130,11 +142,17 @@ function connect(code) {
 
 function onMessage(msg, channel) {
   if (msg.t === MSG.CTRL) {
-    if (Number.isFinite(msg.gain)) {
-      const input = $('#rng-gain');
-      input.value = String(msg.gain);
-      $('#v-gain').textContent = `${Number(msg.gain).toFixed(2)}×`;
-      log.info(`电脑端把灵敏度改成了 ${Number(msg.gain).toFixed(2)}×`);
+    if (typeof msg.rollLock === 'boolean') {
+      rollLock = msg.rollLock;
+      $('#v-level').textContent = `自动校平：${rollLock ? '开' : '关'}`;
+    }
+    if (msg.recenter === true) {
+      relative.calibrate(currentQuaternion());
+      log.info('电脑端已设正，手机读数归零');
+    }
+    if (msg.level === true) {
+      relative.level(currentQuaternion());
+      log.info('电脑端已校平');
     }
     return;
   }
@@ -147,6 +165,9 @@ function onMessage(msg, channel) {
 
 function paintStatus(snap) {
   const active = snap.peerActive;
+  // 连上之后把配对面板收起来，把屏幕让给陀螺仪和方向盘；
+  // 断开时它会自动回来，方便重连。
+  document.querySelector('.app').classList.toggle('is-linked', snap.anyChannelOpen);
   setPill($('#pill-link'), active ? 'ok' : (snap.anyChannelOpen ? 'warn' : 'bad'),
     active ? '已连上电脑' : (snap.anyChannelOpen ? '等待电脑响应' : '未连接'));
   const roomPill = $('#pill-room');
@@ -168,7 +189,6 @@ if (isValidRoom($('#code').value)) {
   connect($('#code').value);
 } else {
   log.info('等待输入电脑端显示的 6 位房间码，或直接用手机相机扫电脑上的二维码');
-  $('#setup-help').textContent = '扫二维码会自带房间码，不用手输；手输的话要 6 位字母数字，字母大小写都可以。';
 }
 
 $('#btn-connect').addEventListener('click', () => connect(normalizeRoom($('#code').value)));
@@ -201,6 +221,7 @@ $('#btn-gyro').addEventListener('click', async () => {
   try {
     await source.start();
     gyroOn = true;
+    relative.reset();
     $('#btn-gyro').classList.add('hidden');
     $('#gyro-help').textContent = '陀螺仪已开启。拿起手机转动、抬头、低头，电脑里的虚拟手机就会跟着动。';
     log.ok('陀螺仪已开启');
@@ -245,6 +266,33 @@ function resetOffset() {
   rebuildOffset();
 }
 
+// 按下按钮这一刻的准确姿态（含触摸微调）。发给电脑端当校准零点，
+// 这样两边用的是同一个四元数，不会因为网络延迟差出一帧。
+function currentQuaternion() {
+  if (gyroOn && source.hasData) source.readInto(poseScratch, offsetQuat);
+  else poseScratch.copy(offsetQuat);
+  return poseScratch;
+}
+
+function recalibrate(from = '按钮') {
+  resetOffset();
+  const q = currentQuaternion();
+  relative.calibrate(q);
+  transport?.send(MSG.CTRL, { recenter: true, q: q.toArray() });
+  log.info(`${from}设正：手机当前朝向 = 正前方，读数归零`);
+  toast('已设正，读数归零');
+  navigator.vibrate?.(40);
+}
+
+function levelHorizon(from = '按钮') {
+  const q = currentQuaternion();
+  relative.level(q);
+  transport?.send(MSG.CTRL, { level: true, q: q.toArray() });
+  log.info(`${from}校平：地平线转正，朝向和俯仰不变`);
+  toast('已校平，地平线水平');
+  navigator.vibrate?.(40);
+}
+
 const held = { up: false, down: false, left: false, right: false };
 const pad = $('#pad');
 
@@ -259,9 +307,7 @@ pad.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   const dir = zone.dataset.dir;
   if (dir === 'center') {
-    resetOffset();
-    transport?.send(MSG.CTRL, { recenter: true });
-    toast('已回正并把当前朝向设为正前方');
+    recalibrate('方向盘');
     return;
   }
   held[dir] = true;
@@ -329,6 +375,8 @@ setInterval(() => {
   if (!sending) return;
   if (gyroOn && source.hasData) {
     source.readInto(outgoing, offsetQuat);
+    // 第一帧真实姿态作为手机端读数的零点，和电脑端的自动设正对齐
+    if (!relative.calibrated) relative.calibrate(outgoing);
     lastPose = now;
   } else if (offsetYaw !== 0 || offsetPitch !== 0) {
     outgoing.copy(offsetQuat);
@@ -340,7 +388,11 @@ setInterval(() => {
     lastPose = now;
   }
 
-  transport?.send(MSG.ORIENT, { q: outgoing.toArray() });
+  transport?.send(MSG.ORIENT, {
+    q: outgoing.toArray(),
+    // 屏幕方向：电脑端显示竖屏/横屏，并据此确认姿态换算用的是同一个角度
+    sa: source.screenAngle(),
+  });
   sentCount++;
 }, 1000 / 60);
 
@@ -363,9 +415,16 @@ function drawHorizon() {
   ctx.fillStyle = '#060a11';
   ctx.fillRect(0, 0, w, h);
 
-  const pitch = gyroOn && source.hasData ? source.beta : 0;
-  const roll = gyroOn && source.hasData ? source.gamma : 0;
-  const heading = gyroOn && source.hasData ? source.alpha : 0;
+  const live = gyroOn && source.hasData && relative.calibrated;
+  let pitch = 0;
+  let roll = 0;
+  let heading = 0;
+  if (live) {
+    const angles = relative.readAngles(outgoing, rollLock);
+    pitch = angles.pitch;
+    roll = angles.roll;
+    heading = angles.yaw;
+  }
 
   const cx = w / 2;
   const cy = h / 2 + 6;
@@ -446,13 +505,32 @@ function drawHorizon() {
 setInterval(() => {
   $('#v-sent').textContent = String(sentCount);
   const has = gyroOn && source.hasData;
-  $('#v-alpha').textContent = has ? `${source.alpha.toFixed(0)}°` : '—';
-  $('#v-beta').textContent = has ? `${source.beta.toFixed(0)}°` : '—';
-  $('#v-gamma').textContent = has ? `${source.gamma.toFixed(0)}°` : '—';
-  if (has) $('#gyro-help').textContent = source.absolute
-    ? '陀螺仪工作中（带磁力计，左右漂移会自动修正）。'
-    : '陀螺仪工作中。如果左右方向慢慢跑偏，点「把当前朝向设为正前方」重新对一次。';
+  if (has) {
+    const a = relative.readAngles(outgoing, rollLock);
+    $('#v-yaw').textContent = `${a.yaw.toFixed(0)}°`;
+    $('#v-pitch').textContent = `${a.pitch.toFixed(0)}°`;
+    $('#v-roll').textContent = `${a.roll.toFixed(0)}°`;
+    $('#gyro-help').textContent = source.absolute
+      ? '陀螺仪工作中（带磁力计，左右漂移会自动修正）。'
+      : '陀螺仪工作中。如果左右方向慢慢跑偏，点「设正」重新对一次零点。';
+  } else {
+    $('#v-yaw').textContent = '—';
+    $('#v-pitch').textContent = '—';
+    $('#v-roll').textContent = '—';
+  }
 }, 150);
+
+// ---- 横竖屏 -------------------------------------------------------------
+
+function paintScreenMode() {
+  $('#v-screen').textContent = `屏幕：${screenOrientationLabel(source.screenAngle())}`;
+}
+paintScreenMode();
+window.addEventListener('resize', paintScreenMode);
+window.addEventListener('orientationchange', () => setTimeout(paintScreenMode, 150));
+if (screen.orientation?.addEventListener) {
+  screen.orientation.addEventListener('change', () => setTimeout(paintScreenMode, 80));
+}
 
 (function tick() {
   drawHorizon();
@@ -461,18 +539,8 @@ setInterval(() => {
 
 // ---- 其他控件 -----------------------------------------------------------
 
-$('#rng-gain').addEventListener('input', (e) => {
-  const gain = Number(e.target.value);
-  $('#v-gain').textContent = `${gain.toFixed(2)}×`;
-  transport?.send(MSG.CTRL, { gain });
-});
-
-$('#btn-recal').addEventListener('click', () => {
-  resetOffset();
-  transport?.send(MSG.CTRL, { recenter: true });
-  log.info('已请求电脑端重新校准');
-  toast('已重新校准');
-});
+$('#btn-recal').addEventListener('click', () => recalibrate());
+$('#btn-level').addEventListener('click', () => levelHorizon());
 
 $('#btn-pause').addEventListener('click', (e) => {
   sending = !sending;

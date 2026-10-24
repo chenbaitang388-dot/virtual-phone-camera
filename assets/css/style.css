@@ -290,6 +290,28 @@ a:hover {
   padding-bottom: calc(10px + env(safe-area-inset-bottom));
 }
 
+/* 手机竖屏内容多，面板会被 flex 压扁；让面板自己滚，方向盘始终留在底部 */
+.app--phone .main > .panel,
+.app--phone .main > details.panel {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.app--phone .main > .panel {
+  flex: 0 1 auto;
+}
+
+/* 配对面板不压缩，保证「连接电脑」始终可见；连上之后整块收起 */
+.app--phone #setup-panel {
+  flex: 0 0 auto;
+}
+
+.app--phone.is-linked #setup-panel {
+  display: none;
+}
+
 
 /* ===== 05. 状态指示 (.pill / .dot) ===== */
 .pill {
@@ -986,6 +1008,40 @@ a:hover {
   gap: 10px;
 }
 
+/* 电脑端走动的键位提示 */
+.keyhint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: rgba(148, 163, 184, 0.12);
+  font-family: var(--mono);
+  font-size: 0.74em;
+  color: var(--text);
+}
+
+/* 手机端姿态指示仪：Canvas 默认 300×150，必须显式撑满 */
+#horizon {
+  display: block;
+  width: 100%;
+  height: 132px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #060a11;
+}
+
 
 /* ===== 14. 触摸方向盘 (.pad) ===== */
 .pad {
@@ -1294,10 +1350,42 @@ a:hover {
   }
 }
 
-/* 横屏手机：压缩方向盘高度，避免超出视口 */
-@media (max-height: 520px) and (orientation: landscape) {
-  .app--phone .pad {
+/* 横屏手机：左右两栏 —— 左边配对与陀螺仪，右边方向盘占满高度。
+   横竖屏的姿态换算在 JS 里已经按 screen.orientation.angle 分别处理，
+   这里只负责把控件摆得下。 */
+@media (orientation: landscape) and (max-height: 560px) {
+  .app--phone .main {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .app--phone #setup-panel {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .app--phone #gyro-panel {
+    grid-column: 1;
+    grid-row: 2;
     min-height: 0;
+    overflow: auto;
+  }
+
+  .app--phone #pad {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    min-height: 0;
+  }
+
+  /* 横屏高度紧张：日志先让位 */
+  .app--phone .main > details.panel {
+    display: none;
+  }
+
+  #horizon {
+    height: 96px;
   }
 }
 
