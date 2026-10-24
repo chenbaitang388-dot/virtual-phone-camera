@@ -114,6 +114,14 @@ a:hover {
   display: none; /* 覆盖性工具类，用于 JS 切换显示 */
 }
 
+/* 光有上面一条不够：.btn 和 .panel 自己也声明了 display，
+   同优先级下后出现的规则会赢，导致 .hidden 失效（"停止并保存"按钮会一直露出来）。
+   这里用组合选择器把优先级提到 .btn / .panel 之上，与书写顺序无关。 */
+.hidden.btn,
+.hidden.panel {
+  display: none;
+}
+
 .muted {
   color: var(--text-dim);
   font-size: 0.85em;
