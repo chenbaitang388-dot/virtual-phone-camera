@@ -50,7 +50,7 @@
       </div>
 
       <div class="overlay overlay--bl">
-        <span class="muted">拖动画面旋转导播 · 滚轮缩放 · <b>W A S D</b> 走动 · <b>Shift</b> 加速 · <b>C</b> 设正 · <b>V</b> 校平 · <b>R</b> 回原点</span>
+        <span class="muted">拖动画面旋转导播 · 滚轮缩放 · <b>W A S D</b> 走动 · <b>Q / E</b> 降 / 升 · <b>Shift</b> 加速 · <b>C</b> 设正 · <b>V</b> 校平 · <b>R</b> 回原点</span>
       </div>
 
       <div id="labels"></div>
@@ -188,16 +188,19 @@
         <div class="help keyhint">
           <span class="keycap">W</span><span class="keycap">A</span><span class="keycap">S</span><span class="keycap">D</span>
           <span>前后左右走</span>
+          <span class="keycap">Q</span><span>下降</span>
+          <span class="keycap">E</span><span>上升</span>
           <span class="keycap">Shift</span><span>加速</span>
           <span class="keycap">R</span><span>回原点</span>
         </div>
         <div class="help">
           虚拟手机就是一个“人”：往哪看就往哪走，抬头看天也能照常前进。
+          Q / E 沿竖直方向下降 / 上升，松开后悬停，高度范围 0.25–40 米。
           走位会直接出现在录制画面里。
         </div>
 
         <div class="row">
-          <span class="muted mono" id="walk-pos">位置 0.0, 0.0</span>
+          <span class="muted mono" id="walk-pos">X 0.0 · Y 1.6 · Z 0.0</span>
           <button class="btn btn--ghost btn--sm" id="btn-reset-pos">回到原点</button>
         </div>
 
@@ -766,6 +769,7 @@ function syncMoveInput() {
   studio.setMoveInput({
     forward: (heldKeys.has('KeyW') ? 1 : 0) - (heldKeys.has('KeyS') ? 1 : 0),
     right: (heldKeys.has('KeyD') ? 1 : 0) - (heldKeys.has('KeyA') ? 1 : 0),
+    up: (heldKeys.has('KeyE') ? 1 : 0) - (heldKeys.has('KeyQ') ? 1 : 0),
     run: heldKeys.has('ShiftLeft') || heldKeys.has('ShiftRight'),
   });
 }
@@ -774,7 +778,7 @@ window.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (isTextTarget(e.target)) return;
 
-  if (e.code === 'KeyW' || e.code === 'KeyA' || e.code === 'KeyS' || e.code === 'KeyD') {
+  if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE'].includes(e.code)) {
     heldKeys.add(e.code);
     syncMoveInput();
     e.preventDefault();
@@ -805,6 +809,18 @@ window.addEventListener('keyup', (e) => {
 });
 
 window.addEventListener('blur', () => {
+  heldKeys.clear();
+  syncMoveInput();
+});
+
+// 切换标签页或开始输入时释放移动键，避免错过 keyup 后持续升降。
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) return;
+  heldKeys.clear();
+  syncMoveInput();
+});
+window.addEventListener('focusin', (e) => {
+  if (!isTextTarget(e.target)) return;
   heldKeys.clear();
   syncMoveInput();
 });
@@ -864,7 +880,7 @@ setInterval(() => {
   $('#s-roll').textContent = `${angles.roll.toFixed(0)}°`;
 
   const pos = studio.getPosition(posScratch);
-  $('#walk-pos').textContent = `位置 ${pos.x.toFixed(1)}, ${pos.z.toFixed(1)}`;
+  $('#walk-pos').textContent = `X ${pos.x.toFixed(1)} · Y ${pos.y.toFixed(1)} · Z ${pos.z.toFixed(1)}`;
 
   updateViewLabels();
 }, 400);

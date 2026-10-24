@@ -77,13 +77,15 @@ export class VirtualPhoneStudio {
     this._target = new THREE.Quaternion();
     this._orientation = new THREE.Quaternion();
 
-    // 第一人称步行：虚拟手机就是"人"，相机的高度固定在站立视高。
+    // 第一人称移动：水平走动和独立升降，共用加减速和速度限制。
     this.walkSpeed = 2.8;
     this.runSpeed = 5.6;
     this.walkAccel = 12;
     this.walkBounds = 40;
+    this.minHeight = 0.25;
+    this.maxHeight = 40;
     this._walking = false;
-    this._moveInput = { forward: 0, right: 0, run: false };
+    this._moveInput = { forward: 0, right: 0, up: 0, run: false };
     this._velocity = new THREE.Vector3();
     this._lastPhonePos = new THREE.Vector3().copy(PHONE_PIVOT);
     this._obstacles = [];
@@ -201,16 +203,18 @@ export class VirtualPhoneStudio {
 
   // ---- 第一人称走动 -----------------------------------------------------
 
-  // forward = W/S（+1 前进），right = D/A（+1 右移），run = Shift
+  // forward = W/S（+1 前进），right = D/A（+1 右移），up = E/Q（+1 上升），run = Shift
   setMoveInput(input = {}) {
     const forward = THREE.MathUtils.clamp(Number(input.forward) || 0, -1, 1);
     const right = THREE.MathUtils.clamp(Number(input.right) || 0, -1, 1);
+    const up = THREE.MathUtils.clamp(Number(input.up) || 0, -1, 1);
     this._moveInput.forward = forward;
     this._moveInput.right = right;
+    this._moveInput.up = up;
     this._moveInput.run = !!input.run;
 
     // 待机动画会自己转，一按走动就把当下的姿态钉住，避免画面先跳一下。
-    if ((forward || right) && this.idle) {
+    if ((forward || right || up) && this.idle) {
       this._target.copy(this._orientation);
       this.idle = false;
     }
@@ -547,7 +551,7 @@ export class VirtualPhoneStudio {
   }
 
   _buildPhone() {
-    // phoneGroup 是旋转枢轴，两台相机挂在原点，所以它只转不平移。
+    // phoneGroup 同时控制位置和朝向，两台相机随手机一起移动。
     this.phoneGroup = new THREE.Group();
     this.phoneGroup.position.copy(PHONE_PIVOT);
     this.scene.add(this.phoneGroup);
@@ -699,7 +703,7 @@ export class VirtualPhoneStudio {
   // 走路的"前"永远是当前看的方向投影到地面；抬头看天也照样能往前走。
   _updateWalk(dt) {
     const input = this._moveInput;
-    const wants = input.forward !== 0 || input.right !== 0;
+    const wants = input.forward !== 0 || input.right !== 0 || input.up !== 0;
 
     _wish.set(0, 0, 0);
     if (wants) {
@@ -714,6 +718,8 @@ export class VirtualPhoneStudio {
       }
       _right.crossVectors(_forward, UP).normalize();
       _wish.addScaledVector(_forward, input.forward).addScaledVector(_right, input.right);
+      // 升降始终沿世界竖直方向，不受手机俯仰或翻滚影响。
+      _wish.y = input.up;
       if (_wish.lengthSq() > 1) _wish.normalize();
       _wish.multiplyScalar(input.run ? this.runSpeed : this.walkSpeed);
     }
@@ -726,7 +732,11 @@ export class VirtualPhoneStudio {
 
     const pos = this.phoneGroup.position;
     pos.addScaledVector(this._velocity, dt);
-    pos.y = PHONE_PIVOT.y;
+    const height = THREE.MathUtils.clamp(pos.y, this.minHeight, this.maxHeight);
+    if (height !== pos.y) {
+      pos.y = height;
+      this._velocity.y = 0;
+    }
 
     const radius = Math.hypot(pos.x, pos.z);
     if (radius > this.walkBounds) {
