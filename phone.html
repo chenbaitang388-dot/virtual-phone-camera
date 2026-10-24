@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#0b0e14" />
 <title>手机端 · 虚拟手机摄像头遥控器</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='11' fill='%2338bdf8'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%230b0e14'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="./assets/css/style.css" />
 <script src="./vendor/peerjs.min.js"></script>
 <script src="./vendor/mqtt.min.js"></script>
@@ -98,7 +99,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { DualTransport } from './src/transport.js';
-import { MSG, normalizeRoom, isValidRoom } from './src/protocol.js';
+import { MSG, normalizeRoom, isValidRoom, isFiniteQuaternion } from './src/protocol.js';
 import {
   OrientationSource, RelativeOrientation, needsPermissionGesture,
   supportsDeviceOrientation, screenOrientationLabel,
@@ -112,6 +113,12 @@ const toast = createToast($('#toast'));
 const relative = new RelativeOrientation();
 const poseScratch = new THREE.Quaternion();
 let rollLock = true;
+// 新连接或刚开陀螺仪时，用第一帧真实姿态主动请求一次设正
+let recenterOnNextSample = true;
+
+function controlQuaternion(value) {
+  return isFiniteQuaternion(value) ? new THREE.Quaternion().fromArray(value) : null;
+}
 
 // ---- 配对 ---------------------------------------------------------------
 
@@ -128,8 +135,9 @@ function connect(code) {
     return;
   }
   if (transport) transport.close();
-  // 新连接重新对零点：下一次采样会成为手机端读数的基准
+  // 新连接重新对零点：第一帧真实姿态会请求电脑端一起设正
   relative.reset();
+  recenterOnNextSample = true;
   transport = new DualTransport({ room: code, role: 'phone' });
   transport.onMessage(onMessage);
   transport.onStatus(paintStatus);
@@ -147,11 +155,13 @@ function onMessage(msg, channel) {
       $('#v-level').textContent = `自动校平：${rollLock ? '开' : '关'}`;
     }
     if (msg.recenter === true) {
-      relative.calibrate(currentQuaternion());
+      recenterOnNextSample = false;
+      relative.calibrate(controlQuaternion(msg.q) || currentQuaternion());
       log.info('电脑端已设正，手机读数归零');
     }
     if (msg.level === true) {
-      relative.level(currentQuaternion());
+      recenterOnNextSample = false;
+      relative.level(controlQuaternion(msg.q) || currentQuaternion());
       log.info('电脑端已校平');
     }
     return;
@@ -165,9 +175,10 @@ function onMessage(msg, channel) {
 
 function paintStatus(snap) {
   const active = snap.peerActive;
-  // 连上之后把配对面板收起来，把屏幕让给陀螺仪和方向盘；
-  // 断开时它会自动回来，方便重连。
-  document.querySelector('.app').classList.toggle('is-linked', snap.anyChannelOpen);
+  // 只有真的收到过电脑端的消息才收起配对面板。
+  // 不能只看 MQTT 通道是否打开：房间码打错时 MQTT 也能连上 broker，
+  // 那样会把输入框藏起来，用户连改都没法改。
+  document.querySelector('.app').classList.toggle('is-linked', snap.stats.received > 0);
   setPill($('#pill-link'), active ? 'ok' : (snap.anyChannelOpen ? 'warn' : 'bad'),
     active ? '已连上电脑' : (snap.anyChannelOpen ? '等待电脑响应' : '未连接'));
   const roomPill = $('#pill-room');
@@ -222,6 +233,7 @@ $('#btn-gyro').addEventListener('click', async () => {
     await source.start();
     gyroOn = true;
     relative.reset();
+    recenterOnNextSample = true;
     $('#btn-gyro').classList.add('hidden');
     $('#gyro-help').textContent = '陀螺仪已开启。拿起手机转动、抬头、低头，电脑里的虚拟手机就会跟着动。';
     log.ok('陀螺仪已开启');
@@ -357,7 +369,6 @@ pad.addEventListener('pointermove', (e) => {
 // ---- 发送循环 -----------------------------------------------------------
 
 const outgoing = new THREE.Quaternion();
-let lastPose = performance.now();
 let lastFrame = performance.now();
 
 setInterval(() => {
@@ -375,17 +386,24 @@ setInterval(() => {
   if (!sending) return;
   if (gyroOn && source.hasData) {
     source.readInto(outgoing, offsetQuat);
-    // 第一帧真实姿态作为手机端读数的零点，和电脑端的自动设正对齐
-    if (!relative.calibrated) relative.calibrate(outgoing);
-    lastPose = now;
+    if (recenterOnNextSample) {
+      // 刚连上或刚开陀螺仪：把第一帧真实姿态同时设成两边的零点。
+      // 否则电脑端会先拿空姿态（或上一台手机的姿态）当零点，开陀螺仪瞬间画面会跳。
+      relative.calibrate(outgoing);
+      // 通道还没通时 send 会返回 false，下个采样继续重试，不能提前把标志清掉
+      if (transport?.send(MSG.CTRL, { recenter: true, q: outgoing.toArray() })) {
+        recenterOnNextSample = false;
+        log.info('已自动把手机当前朝向设为正前方');
+      }
+    } else if (!relative.calibrated) {
+      relative.calibrate(outgoing);
+    }
   } else if (offsetYaw !== 0 || offsetPitch !== 0) {
     outgoing.copy(offsetQuat);
-    lastPose = now;
   } else {
-    // 既没有陀螺仪也没有偏移时，仍然定期发一个空姿态，让电脑端知道手机还在。
-    if (now - lastPose < 900) return;
-    outgoing.identity();
-    lastPose = now;
+    // 既没陀螺仪也没触摸偏移时不发姿态包：空四元数会被电脑端误当成首帧零点。
+    // 手机是否在线由传输层的 PING 心跳负责，这里不需要占位包。
+    return;
   }
 
   transport?.send(MSG.ORIENT, {
@@ -552,6 +570,15 @@ window.addEventListener('beforeunload', () => {
   source.stop();
   transport?.close();
 });
+
+if (params.get('debug') === '1') {
+  window.__phone = {
+    source, relative, recalibrate, levelHorizon,
+    transport: () => transport,
+    outgoing: () => outgoing.toArray(),
+  };
+  log.warn('已开启调试钩子 window.__phone');
+}
 
 log.info('手机端已就绪');
 </script>

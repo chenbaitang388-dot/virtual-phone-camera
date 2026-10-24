@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>电脑端 · 虚拟手机摄像头</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='11' fill='%2338bdf8'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%230b0e14'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="./assets/css/style.css" />
 <script src="./vendor/peerjs.min.js"></script>
 <script src="./vendor/mqtt.min.js"></script>
@@ -398,6 +399,15 @@ function onMessage(msg) {
       return;
     }
     incoming.fromArray(msg.q);
+    // 公共 MQTT 上任何人都能往房间主题里发包；非单位四元数会把相机矩阵缩放坏
+    if (incoming.lengthSq() < 1e-6) {
+      if (!badPacketWarned) {
+        badPacketWarned = true;
+        log.warn('收到退化的姿态数据，已丢弃（画面不受影响）');
+      }
+      return;
+    }
+    incoming.normalize();
     smoother.push(incoming);
     lastOrientationAt = performance.now();
     if (Number.isFinite(msg.sa) && msg.sa !== lastScreenAngle) {
@@ -427,8 +437,8 @@ function onMessage(msg) {
   if (msg.t === MSG.HELLO) {
     log.ok(`手机端已接入房间 ${room}`);
     toast('手机已连接，转动手机试试');
-    // 新连接重新开始：等第一包姿态到了自动设正，并把当前的校平设置同步给手机
-    smoother.calibrated = false;
+    // 不在这里重置校准：WebRTC 掉线重连也会重发 HELLO，
+    // 一重置画面就会莫名其妙跳一下。新手机会话由手机端首帧主动请求设正。
     lastScreenAngle = null;
     transport?.send(MSG.CTRL, { rollLock: smoother.rollLock });
   }
@@ -584,8 +594,8 @@ $('#rng-fov').addEventListener('input', (e) => {
 function doRecalibrate(from = '按钮') {
   smoother.calibrate();
   applyCalibration();
-  // 手机端也有自己的读数，让它同步把零点挪到同一处
-  transport?.send(MSG.CTRL, { recenter: true });
+  // 把电脑端实际用的那个四元数发给手机，两边零点完全一致
+  transport?.send(MSG.CTRL, { recenter: true, q: smoother.calibratedAt.toArray() });
   log.info(`${from}设正：手机当前朝向 = 正前方，读数归零`);
   toast('已设正，三个读数归零');
 }
@@ -593,7 +603,7 @@ function doRecalibrate(from = '按钮') {
 function doLevel(from = '按钮') {
   smoother.level();
   applyCalibration();
-  transport?.send(MSG.CTRL, { level: true });
+  transport?.send(MSG.CTRL, { level: true, q: smoother.calibratedAt.toArray() });
   log.info(`${from}校平：地平线转正，朝向和俯仰保持不变`);
   toast('已校平，地平线水平');
 }
@@ -729,6 +739,8 @@ $('#btn-again').addEventListener('click', () => {
 // 空格键开始 / 停止录制（焦点在表单控件或按钮上时不抢键）
 window.addEventListener('keydown', (e) => {
   if (e.code !== 'Space') return;
+  // 不挡系统按键重复，否则按住空格会反复开始/停止录制
+  if (e.repeat) return;
   const tag = e.target instanceof Element ? e.target.tagName : '';
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'TEXTAREA') return;
   e.preventDefault();
@@ -814,17 +826,18 @@ const operatorLabel = makeLabel();
 function updateViewLabels() {
   const view = studio.getViewRects();
   const { scale, size } = view;
-  const place = (el, rect, text) => {
+  const place = (el, rect, text, offsetBottom = 12) => {
     if (!rect || !text) {
       el.classList.add('hidden');
       return;
     }
     el.classList.remove('hidden');
     el.style.left = `${rect.x * scale + 12}px`;
-    el.style.bottom = `${(size.h - rect.y - rect.h) * scale + 12}px`;
+    el.style.bottom = `${(size.h - rect.y - rect.h) * scale + offsetBottom}px`;
     el.textContent = text;
   };
-  place(phoneLabel, view.phone, '虚拟手机视角（录这里）');
+  // 左下角被键位提示占着，手机视角的标签往上抬一点，别叠在一起
+  place(phoneLabel, view.phone, '虚拟手机视角（录这里）', 58);
   place(operatorLabel, view.operator, '导播视角');
 }
 

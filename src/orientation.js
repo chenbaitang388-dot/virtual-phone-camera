@@ -14,6 +14,13 @@ const _rel = new THREE.Quaternion();
 const _leveled = new THREE.Quaternion();
 const _inv = new THREE.Quaternion();
 const _angles = new THREE.Euler();
+const _rightScratch = new THREE.Vector3();
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const _fwd = new THREE.Vector3();
+const _right = new THREE.Vector3();
+const _up = new THREE.Vector3();
+const _back = new THREE.Vector3();
+const _basis = new THREE.Matrix4();
 
 export function deviceOrientationToQuaternion(out, alpha, beta, gamma, screenAngle) {
   const a = THREE.MathUtils.degToRad(Number.isFinite(alpha) ? alpha : 0);
@@ -57,11 +64,29 @@ export function quaternionToAngles(q, out = {}) {
   return out;
 }
 
-// 去掉翻滚、保留朝向和俯仰：地平线转正，但看的方向不变。
-export function withoutRoll(q, out = new THREE.Quaternion()) {
-  _angles.setFromQuaternion(q, 'YXZ');
-  _angles.z = 0;
-  return out.setFromEuler(_angles);
+// 去掉翻滚、保留朝向和俯仰：地平线转正，但镜头看的方向完全不变。
+//
+// 不能用欧拉角 z=0 的做法：俯仰接近 ±90° 时欧拉分解会奇异，
+// 越过天顶会突然翻面。这里直接用"视线 + 世界上方"重建相机基底：
+//   右 = 视线 × 世界上方，上 = 右 × 视线
+// 视线接近垂直时叉积退化，改用上一帧的右方向，保证连续。
+export function withoutRoll(q, out = new THREE.Quaternion(), referenceRight = null) {
+  _fwd.set(0, 0, -1).applyQuaternion(q);
+
+  if (Math.abs(_fwd.y) > 0.9995) {
+    if (referenceRight) _right.copy(referenceRight);
+    else _right.set(1, 0, 0);
+    _right.addScaledVector(_fwd, -_right.dot(_fwd));
+    if (_right.lengthSq() < 1e-8) _right.set(0, 0, 1);
+    _right.normalize();
+  } else {
+    _right.crossVectors(_fwd, WORLD_UP).normalize();
+  }
+
+  _up.crossVectors(_right, _fwd).normalize();
+  _back.copy(_fwd).negate();
+  _basis.makeBasis(_right, _up, _back);
+  return out.setFromRotationMatrix(_basis);
 }
 
 function shortest(q) {
@@ -99,9 +124,11 @@ export class OrientationSource {
       this.alpha = e.alpha ?? 0;
       this.beta = e.beta ?? 0;
       this.gamma = e.gamma ?? 0;
-      // iOS Safari 提供 webkitCompassHeading（真北朝向），有它就能避免累积漂移。
+      // iOS Safari 提供 webkitCompassHeading（真北朝顺时针增大），
+      // 而 deviceorientation 的 alpha 是绕 Z 轴逆时针增大，两者方向相反。
+      // 直接拿 heading 当 alpha 会让左右完全镜像，必须换算。
       if (Number.isFinite(e.webkitCompassHeading)) {
-        this.alpha = e.webkitCompassHeading;
+        this.alpha = (360 - e.webkitCompassHeading) % 360;
         this.absolute = true;
       } else {
         this.absolute = e.absolute === true;
@@ -152,6 +179,10 @@ export class OrientationSmoother {
     this._calib = new THREE.Quaternion();
     this._calibInverse = new THREE.Quaternion();
     this._lastSource = new THREE.Quaternion();
+    // 校准用的那个原始四元数。电脑端按设正/校平时把它发给手机，
+    // 两边用同一个数当零点，不会因为网络延迟差出一帧。
+    this.calibratedAt = new THREE.Quaternion();
+    this._lastRight = new THREE.Vector3(1, 0, 0);
     this._hasSource = false;
     this.calibrated = false;
     this.received = 0;
@@ -162,6 +193,8 @@ export class OrientationSmoother {
     const source = sourceQuaternion || (this._hasSource ? this._lastSource : this.target);
     this._calib.copy(source);
     this._calibInverse.copy(source).invert();
+    this.calibratedAt.copy(source);
+    this._lastRight.set(1, 0, 0);
     this.calibrated = true;
     this.target.identity();
     this.current.identity();
@@ -176,16 +209,20 @@ export class OrientationSmoother {
 
     _rel.copy(this._calibInverse).multiply(source);
     shortest(_rel);
-    withoutRoll(_rel, _leveled);
+    withoutRoll(_rel, _leveled, this._lastRight);
 
     // 新的校准零点 C' 满足 C'⁻¹·S = 校平后的相对量：C' = S·L⁻¹
     _inv.copy(_leveled).invert();
     this._calib.copy(source).multiply(_inv);
     this._calibInverse.copy(this._calib).invert();
+    this.calibratedAt.copy(source);
 
     this.relative.copy(_leveled);
     this.target.copy(_leveled);
-    this.current.copy(_leveled);
+    // 不直接把 current 切过去：让 slerp 平滑收敛，
+    // 否则运动中按「校平」会把平滑滞后一次性吃掉，画面跳一下。
+    _rightScratch.set(1, 0, 0).applyQuaternion(_leveled);
+    this._lastRight.copy(_rightScratch);
     return this;
   }
 
@@ -197,7 +234,11 @@ export class OrientationSmoother {
 
     _rel.copy(this._calibInverse).multiply(sourceQuaternion);
     shortest(_rel);
-    if (this.rollLock) withoutRoll(_rel, _rel);
+    if (this.rollLock) {
+      withoutRoll(_rel, _rel, this._lastRight);
+      _rightScratch.set(1, 0, 0).applyQuaternion(_rel);
+      this._lastRight.copy(_rightScratch);
+    }
 
     this.relative.copy(_rel);
     this.target.copy(_rel);
@@ -227,6 +268,7 @@ export class OrientationSmoother {
 export class RelativeOrientation {
   constructor() {
     this._inverse = new THREE.Quaternion();
+    this._lastRight = new THREE.Vector3(1, 0, 0);
     this.calibrated = false;
     this.angles = { yaw: 0, pitch: 0, roll: 0 };
   }
@@ -238,6 +280,7 @@ export class RelativeOrientation {
 
   calibrate(q) {
     this._inverse.copy(q).invert();
+    this._lastRight.set(1, 0, 0);
     this.calibrated = true;
     this.angles.yaw = this.angles.pitch = this.angles.roll = 0;
   }
@@ -246,9 +289,11 @@ export class RelativeOrientation {
     if (!this.calibrated) return this.calibrate(q);
     _rel.copy(this._inverse).multiply(q);
     shortest(_rel);
-    withoutRoll(_rel, _leveled);
+    withoutRoll(_rel, _leveled, this._lastRight);
     _inv.copy(q).invert();
     this._inverse.copy(_leveled).multiply(_inv);
+    _rightScratch.set(1, 0, 0).applyQuaternion(_leveled);
+    this._lastRight.copy(_rightScratch);
   }
 
   readAngles(q, rollLock = false, out = this.angles) {
