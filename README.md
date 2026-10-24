@@ -101,6 +101,57 @@ git push -u origin main
 
 ---
 
+## 换成你自己的 3D 场景
+
+电脑端控制台的 **「5 · 导入自己的场景」** 那一栏，可以在不改任何代码的前提下换掉场景。也支持直接把文件**拖进左边的 3D 画面**。
+
+支持两种东西：
+
+| 导入什么 | 格式 | 要求 |
+|---|---|---|
+| 3D 模型 | **`.glb`**（glTF 2.0 二进制） | 单文件，模型 + 材质 + 贴图都打包在一起 |
+| 全景背景图 | `.jpg` / `.png` / `.webp` 等 | **宽高比必须是 2:1** 的等距柱状投影图 |
+
+不支持的格式，以及原因：
+
+| 格式 | 原因 |
+|---|---|
+| `.blend` | Blender 的工程文件，浏览器读不了 |
+| `.fbx` | 私有格式，需要额外的转换库 |
+| `.obj` | 不带材质和贴图，导进来是灰模 |
+| `.gltf` + `.bin` + 贴图 | 一份描述配一堆散文件，网页里只能选一个文件，其余找不到 |
+| 勾了 Draco 压缩的 `.glb` | 需要额外的解码器文件，本项目没有内置 |
+
+### Blender 导出步骤
+
+`文件` → `导出` → `glTF 2.0（.glb）`，右侧面板里：
+
+- **格式** 选 **glb**（不要选 glTF Separate）
+- **Draco 压缩** **不要勾**
+- 「包含」那一栏按需勾选；不勾就是导出整个场景
+- 其余保持默认，点导出
+
+### 模型的两种摆放方式
+
+控制台里有个「模型摆放方式」下拉框：
+
+- **把镜头放进模型里（房间 / 大场景）** —— 模型中心对齐到虚拟手机所在的位置，镜头是"站在模型内部"的。适合导出一个房间、一条街、一个室内场景。此时程序化的地面和道具会自动隐藏。
+- **当摆件放在正前方（单个物体）** —— 模型底面贴地、水平居中，然后整体推到镜头正前方 2.6 米。适合导出一个杯子、一栋小楼这类单个物体。此时保留地面。
+
+模型会自动按包围盒缩放到合适大小（房间模式按水平尺寸缩到 8 米，摆件模式按最长边缩到 3.2 米），所以你不用在 Blender 里事先统一单位。
+
+### 全景图的来源
+
+- 手机自带的**全景模式**拍的照片（iPhone、华为、小米都有）
+- Insta360、GoPro Max 这类全景相机导出的等距柱状图
+- 网上找的 360° 全景照片（关键词 `equirectangular 360 panorama`）
+
+判断标准很简单：**图片宽度正好是高度的 2 倍**，例如 4096×2048、8192×4096。比例不是 2:1 也不会报错，但贴到球面上会明显变形，页面会提示你。
+
+换进去的全景图和模型都只在**当前这次浏览**里有效，刷新页面会回到程序化生成的默认场景。想长期使用就把它作为默认值写进代码，或者加一个 `<input>` 的预置逻辑。
+
+---
+
 ## 常见问题
 
 **iOS 上陀螺仪没反应？**
@@ -135,7 +186,7 @@ ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p out.mp4
 | `pc.html` | 电脑端页面：3D 视口、虚拟手机、连接面板与录制按钮。 |
 | `phone.html` | 手机端页面：读取陀螺仪并发送朝向的遥控器。 |
 | `src/` | 页面用到的 JavaScript 源码（Three.js 场景、连接、录制等）。 |
-| `vendor/` | 内嵌的第三方库：`three.module.js`（转发层，真正实现在 `three.core.min.js`）、`OrbitControls.js`、`peerjs.min.js`、`mqtt.min.js`、`qrcode.min.js`。 |
+| `vendor/` | 内嵌的第三方库：`three.module.js`（转发层，真正实现在 `three.core.min.js`）、`OrbitControls.js`、`GLTFLoader.js` + `BufferGeometryUtils.js`（导入 .glb 模型用）、`peerjs.min.js`、`mqtt.min.js`、`qrcode.min.js`。 |
 | `assets/css/style.css` | 页面样式表。 |
 | `tools/serve.py` | 本地静态测试服务器，供局域网联调使用。 |
 | `.github/workflows/pages.yml` | GitHub Actions 部署到 GitHub Pages 的流水线。 |
@@ -144,7 +195,7 @@ ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p out.mp4
 
 ## 技术栈与限制
 
-- **依赖已内嵌在本仓库**：`three.module.js`（只是转发层，真正的实现放在同目录的 `three.core.min.js`）、`OrbitControls.js`、`peerjs.min.js`、`mqtt.min.js`、`qrcode.min.js` 都放在 `vendor/` 里，运行时不再从 CDN 拉取，国内访问更稳、也不会因为 CDN 抽风而白屏。
+- **依赖已内嵌在本仓库**：`three.module.js`（只是转发层，真正的实现放在同目录的 `three.core.min.js`）、`OrbitControls.js`、`GLTFLoader.js` + `BufferGeometryUtils.js`、`peerjs.min.js`、`mqtt.min.js`、`qrcode.min.js` 都放在 `vendor/` 里，运行时不再从 CDN 拉取，国内访问更稳、也不会因为 CDN 抽风而白屏。
 - **无构建步骤**：没有打包、编译、npm 安装这些环节，改完文件直接刷新即可，部署也只需要原样上传。
 - **浏览器要求**：需要支持 WebRTC 和 ES Modules 的现代浏览器（较新的 Chrome / Edge / Safari / Firefox）。一些老旧的国产内核浏览器可能不支持 ES Modules。
 - **iOS 需要 HTTPS**：iOS 只在 HTTPS 页面下才允许读取陀螺仪，并且必须由用户手势触发授权按钮。请使用 GitHub Pages 提供的 HTTPS 地址访问。

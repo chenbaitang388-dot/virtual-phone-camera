@@ -188,7 +188,41 @@
 
         <div class="divider"></div>
 
-        <div class="row"><span class="badge">5 · 演示模式</span></div>
+        <div class="row"><span class="badge">5 · 导入自己的场景</span></div>
+        <div class="help">
+          也可以直接把文件<b>拖进左边的画面里</b>。
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="file-pano">全景图（2:1 等距柱状投影）</label>
+          <input class="input" type="file" id="file-pano" accept="image/*" />
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="file-model">3D 模型（.glb）</label>
+          <input class="input" type="file" id="file-model" accept=".glb" />
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="sel-model-mode">模型摆放方式</label>
+          <select class="select" id="sel-model-mode">
+            <option value="surround">把镜头放进模型里（房间 / 大场景）</option>
+            <option value="prop">当摆件放在正前方（单个物体）</option>
+          </select>
+        </div>
+
+        <button class="btn btn--ghost btn--block" id="btn-clear-model">移除导入的模型</button>
+
+        <div class="help">
+          <b>Blender 怎么导出模型</b>：文件 → 导出 → glTF 2.0（.glb），
+          格式选 <b>glb</b>，<b>不要</b>勾选 Draco 压缩，贴图会自动打包进去。<br>
+          <b>全景图从哪来</b>：手机的全景相机、Insta360 导出的照片，
+          或者任何宽高比为 <b>2:1</b> 的等距柱状投影图都行。
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="row"><span class="badge">6 · 演示模式</span></div>
         <div class="help">
           手边没有手机、或者想先看看效果？开演示模式，电脑会用一条预设轨迹自动转动虚拟手机。
           演示数据和真手机走的是完全一样的那条链路。
@@ -507,6 +541,78 @@ $('#btn-recal').addEventListener('click', () => {
 $('#sel-theme').addEventListener('change', (e) => {
   panoramaTheme = e.target.value;
   applyTheme(panoramaTheme).catch((err) => log.err(`全景加载失败：${err.message}`));
+});
+
+// ---- 导入自己的场景 -----------------------------------------------------
+
+async function importFile(file) {
+  if (!file) return;
+  const name = (file.name || '').toLowerCase();
+
+  if (name.endsWith('.glb')) {
+    log.info(`正在解析 ${file.name}（${fmtBytes(file.size)}）…`);
+    toast('正在加载模型…');
+    try {
+      const info = await studio.loadModelFromFile(file, { mode: $('#sel-model-mode').value });
+      log.ok(`模型已载入：${info.meshes} 个网格 / ${info.triangles} 个三角面 / ` +
+        `原始尺寸 ${info.rawSize} / 缩放 ${info.scale.toFixed(3)} 倍`);
+      toast('模型加载完成');
+    } catch (err) {
+      log.err(`模型加载失败：${err.message}`);
+      toast(`模型加载失败：${err.message}`, 'err');
+    }
+    return;
+  }
+
+  if (file.type && file.type.startsWith('image/')) {
+    try {
+      const info = await studio.loadPanoramaImage(file);
+      log.ok(`全景图已替换：${info.width}×${info.height}（宽高比 ${info.ratio.toFixed(2)}:1）`);
+      if (Math.abs(info.ratio - 2) > 0.06) {
+        log.warn('这张图宽高比不是 2:1，贴到球面上会变形；建议用等距柱状投影的全景图');
+        toast('这张不是 2:1 全景图，画面会变形', 'err');
+      } else {
+        toast('全景图已替换');
+      }
+    } catch (err) {
+      log.err(`全景图加载失败：${err.message}`);
+      toast('这个图片读不出来', 'err');
+    }
+    return;
+  }
+
+  toast('只支持 .glb 模型或图片（全景图）', 'err');
+}
+
+function bindFileInput(id) {
+  $(id).addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    importFile(file);
+  });
+}
+bindFileInput('#file-model');
+bindFileInput('#file-pano');
+
+$('#btn-clear-model').addEventListener('click', () => {
+  if (!studio.importedModel) {
+    toast('现在没有导入的模型');
+    return;
+  }
+  studio.clearImportedModel();
+  log.info('已移除导入的模型，恢复程序化场景');
+  toast('已移除模型');
+});
+
+// 直接拖进 3D 画面也能导入
+const viewportEl = $('#viewport');
+['dragenter', 'dragover'].forEach((type) => {
+  viewportEl.addEventListener(type, (e) => { e.preventDefault(); });
+});
+viewportEl.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer?.files?.[0];
+  if (file) importFile(file);
 });
 
 $('#sw-phone').addEventListener('change', (e) => studio.setShowPhone(e.target.checked));

@@ -8,3 +8,4 @@ tools/_*.html
 *.log
 *.err
 math.html
+.test/

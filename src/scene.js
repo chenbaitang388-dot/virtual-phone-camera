@@ -74,6 +74,7 @@ export class VirtualPhoneStudio {
     this._lastAt = performance.now();
     this._raf = 0;
     this._sky = null;
+    this.importedModel = null;
     this.onFrame = null;
 
     this.renderer = new THREE.WebGLRenderer({
@@ -218,6 +219,130 @@ export class VirtualPhoneStudio {
     this.renderer.dispose();
   }
 
+  // ---- 导入自己的素材 ---------------------------------------------------
+
+  // 换掉全景天空球。file 来自 <input type="file"> 或直接拖进画面。
+  async loadPanoramaImage(file) {
+    const image = await this._readImageFile(file);
+    const texture = new THREE.Texture(image);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.needsUpdate = true;
+    texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+
+    const previous = this._sky.material.map;
+    this._sky.material.map = texture;
+    this._sky.material.needsUpdate = true;
+    if (previous) previous.dispose();
+
+    return {
+      width: image.width,
+      height: image.height,
+      ratio: image.width / Math.max(1, image.height),
+    };
+  }
+
+  _readImageFile(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+      image.onerror = () => { URL.revokeObjectURL(url); reject(new Error('这个图片文件读不出来')); };
+      image.src = url;
+    });
+  }
+
+  // 载入 .glb（Blender 导出的 glTF 2.0 二进制）。
+  // mode='surround'：把模型中心套在相机位置，适合房间、街景这类大场景，镜头是"站在里面"；
+  // mode='prop'：把它当一个摆件放在镜头正前方。
+  async loadModelFromFile(file, { mode = 'surround' } = {}) {
+    const { GLTFLoader } = await import('../vendor/GLTFLoader.js');
+    const loader = new GLTFLoader();
+    const buffer = await file.arrayBuffer();
+
+    const gltf = await new Promise((resolve, reject) => {
+      loader.parse(buffer, '', resolve, (err) => {
+        console.warn('[scene] glTF 解析失败：', err);
+        reject(new Error(
+          '这个文件不是有效的 .glb 模型。常见原因：导出时选了 glTF Separate（.gltf + .bin + 贴图）' +
+          '而不是 .glb，或者勾了 Draco 压缩。',
+        ));
+      });
+    });
+
+    const root = gltf.scene;
+    let meshes = 0;
+    let triangles = 0;
+    root.traverse((obj) => {
+      if (!obj.isMesh) return;
+      meshes++;
+      const index = obj.geometry?.index;
+      const position = obj.geometry?.attributes?.position;
+      if (index) triangles += index.count / 3;
+      else if (position) triangles += position.count / 3;
+    });
+    if (!meshes) throw new Error('这个模型里没有可显示的网格');
+
+    root.position.set(0, 0, 0);
+    root.updateMatrixWorld(true);
+    const rawBox = new THREE.Box3().setFromObject(root);
+    const rawSize = rawBox.getSize(new THREE.Vector3());
+    if (!Number.isFinite(rawSize.x) || rawSize.length() === 0) throw new Error('模型尺寸异常');
+
+    const largest = Math.max(rawSize.x, rawSize.y, rawSize.z);
+    const scale = mode === 'surround'
+      ? 8 / Math.max(Math.min(rawSize.x, rawSize.z), 1e-6)
+      : 3.2 / largest;
+    root.scale.setScalar(scale);
+    root.updateMatrixWorld(true);
+
+    const box = new THREE.Box3().setFromObject(root);
+    const center = box.getCenter(new THREE.Vector3());
+    if (mode === 'surround') {
+      // 模型中心对齐到虚拟手机所在的位置，相机就落在模型内部
+      root.position.copy(PHONE_PIVOT).sub(center);
+    } else {
+      // 底面贴地、水平居中，然后整体推到镜头正前方 2.6 米
+      root.position.set(-center.x, -box.min.y, -box.max.z - 2.6);
+    }
+
+    this.clearImportedModel();
+    this.importedModel = root;
+    this.scene.add(root);
+    this.setPropsVisible(false);
+    this.groundGroup.visible = mode === 'prop';
+
+    return {
+      meshes,
+      triangles: Math.round(triangles),
+      rawSize: `${rawSize.x.toFixed(2)} × ${rawSize.y.toFixed(2)} × ${rawSize.z.toFixed(2)}`,
+      scale,
+    };
+  }
+
+  clearImportedModel() {
+    if (!this.importedModel) return;
+    this.scene.remove(this.importedModel);
+    this.importedModel.traverse((obj) => {
+      if (obj.geometry) obj.geometry.dispose();
+      const material = obj.material;
+      if (!material) return;
+      const list = Array.isArray(material) ? material : [material];
+      list.forEach((m) => {
+        Object.values(m).forEach((v) => { if (v && v.isTexture) v.dispose(); });
+        m.dispose();
+      });
+    });
+    this.importedModel = null;
+    this.setPropsVisible(true);
+    this.groundGroup.visible = true;
+  }
+
+  setPropsVisible(visible) {
+    if (!this.props) return;
+    this.props.forEach((prop) => { prop.visible = visible; });
+  }
+
   // ---- 场景搭建 ---------------------------------------------------------
 
   _buildSky() {
@@ -258,19 +383,23 @@ export class VirtualPhoneStudio {
   }
 
   _buildGround() {
+    this.groundGroup = new THREE.Group();
+
     const floor = new THREE.Mesh(
       new THREE.CircleGeometry(90, 72),
       new THREE.MeshStandardMaterial({ color: 0x0a1120, roughness: 0.82, metalness: 0.18 }),
     );
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -0.001;
-    this.scene.add(floor);
+    this.groundGroup.add(floor);
 
     const grid = new THREE.PolarGridHelper(34, 16, 10, 72, 0x1f4066, 0x122740);
     grid.position.y = 0.004;
     grid.material.transparent = true;
     grid.material.opacity = 0.55;
-    this.scene.add(grid);
+    this.groundGroup.add(grid);
+
+    this.scene.add(this.groundGroup);
   }
 
   _buildProps() {
